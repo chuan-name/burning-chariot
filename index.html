@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>燃烧战车 · Burning Chariot</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ 标题画面 ============ -->
+  <section id="screen-title" class="screen active">
+    <div class="title-bg"></div>
+    <div class="title-inner">
+      <p class="kicker">回合制战车对战 · 网页复刻版</p>
+      <h1 class="logo"><span>燃烧</span><span class="logo-hot">战车</span></h1>
+      <p class="sub">BURNING&nbsp;CHARIOT</p>
+      <nav class="menu">
+        <button class="btn btn-primary" data-go="setup">开始战斗</button>
+        <button class="btn" data-go="codex">战车图鉴</button>
+        <button class="btn" data-go="help">玩法说明</button>
+      </nav>
+      <p class="foot">调整角度与力度，算准风力，把对面从地图上抹掉。</p>
+    </div>
+  </section>
+
+  <!-- ============ 出战准备 ============ -->
+  <section id="screen-setup" class="screen">
+    <header class="bar">
+      <button class="btn btn-ghost" data-go="title">← 返回</button>
+      <h2>出战准备</h2>
+      <button class="btn btn-primary" id="btn-start">进入战场</button>
+    </header>
+
+    <div class="setup-grid">
+      <div class="panel">
+        <h3 class="panel-h">对战模式</h3>
+        <div class="chips" id="mode-chips">
+          <button class="chip active" data-mode="1v1">单挑 1 v 1</button>
+          <button class="chip" data-mode="2v2">组队 2 v 2</button>
+          <button class="chip" data-mode="hotseat">同屏双人</button>
+        </div>
+        <h3 class="panel-h">电脑强度</h3>
+        <div class="chips" id="diff-chips">
+          <button class="chip" data-diff="easy">新兵</button>
+          <button class="chip active" data-diff="normal">老手</button>
+          <button class="chip" data-diff="hard">王牌</button>
+        </div>
+        <h3 class="panel-h">炮口指示线</h3>
+        <div class="chips" id="guide-chips">
+          <button class="chip active" data-guide="1">显示（只标角度）</button>
+          <button class="chip" data-guide="0">隐藏</button>
+        </div>
+        <h3 class="panel-h">战场</h3>
+        <div class="maps" id="map-list"></div>
+        <h3 class="panel-h">道具 <em id="shop-count">0 / 4</em></h3>
+        <div class="loadout" id="loadout"></div>
+        <div class="shop" id="shop"></div>
+      </div>
+
+      <div class="panel">
+        <h3 class="panel-h" id="pick-title">选择你的战车</h3>
+        <div class="veh-grid" id="veh-grid"></div>
+        <div class="veh-detail" id="veh-detail"></div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 图鉴 ============ -->
+  <section id="screen-codex" class="screen">
+    <header class="bar">
+      <button class="btn btn-ghost" data-go="title">← 返回</button>
+      <h2>战车图鉴</h2>
+      <span></span>
+    </header>
+    <div class="codex" id="codex-list"></div>
+  </section>
+
+  <!-- ============ 说明 ============ -->
+  <section id="screen-help" class="screen">
+    <header class="bar">
+      <button class="btn btn-ghost" data-go="title">← 返回</button>
+      <h2>玩法说明</h2>
+      <span></span>
+    </header>
+    <div class="help">
+      <div class="panel">
+        <h3 class="panel-h">操作</h3>
+        <ul class="kv">
+          <li><b>← →</b><span>移动战车（消耗燃料）</span></li>
+          <li><b>↑ ↓</b><span>调整炮口角度</span></li>
+          <li><b>空格</b><span>按住蓄力，松开发射；蓄力条上的竖线是你上一发用的力度</span></li>
+          <li><b>1 / 2 / 3</b><span>切换一号武器、二号武器、必杀</span></li>
+          <li><b>Enter</b><span>跳过本回合（油不够时用来攒燃料）</span></li>
+          <li><b>G</b><span>开关炮口指示线（只显示角度，不预测落点）</span></li>
+          <li><b>M</b><span>静音</span></li>
+          <li><b>Esc</b><span>暂停菜单</span></li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3 class="panel-h">规则</h3>
+        <ul class="rules">
+          <li><b>燃料就是一切</b>：开炮和移动共用一条燃料槽，上限 200，但<b>开局只有 22 点</b>——
+            勉强够打一发一号或二号武器再挪两步。必杀要一百多点，得攒上好几个回合。</li>
+          <li><b>延迟出手</b>：每一轮里每辆车都出手一次，延迟只决定这一轮里的<b>先后</b>，
+            不会让谁整轮没得打。这一回合烧掉多少油就换算成多长的延迟，延迟低的先动。
+            所以同一辆车最多连着打两次：上一轮压轴，接着下一轮打头。</li>
+          <li><b>回油</b>：每回合结束自动加油，但一次只有十几点。这一回合省着用、或者打中了敌人，
+            会多回一些；满地图乱跑则会少回一些。油不够开炮时按 Enter 跳过，专心攒油。</li>
+          <li><b>风力</b>：每回合刷新，正数往右吹。轻弹（旋风）被吹得厉害，能量弹（兰登）几乎不受影响。</li>
+          <li><b>地形会被炸烂</b>：脚下被掏空就会掉落，落差过大要摔伤，掉出地图直接阵亡。</li>
+          <li><b>必杀技</b>：不靠能量槽，就是一发很贵的武器——攒够油按 3 释放，放完油槽还剩一些，
+            但接下来会被延迟压住好几手。</li>
+          <li><b>道具</b>：每辆车最多带 4 个，赛前挑选，场上也能靠空投补充。
+            只能在<b>开炮之前</b>用，一个回合可以连用好几个；但「大回血 / 大回燃料」用完立刻交出回合，
+            所以先用哪个是要想一想的。别人只看得到你「在用道具」，看不到用的是哪个。</li>
+          <li><b>补给箱</b>：每四回合空投一次，开炮打中或开过去压到都能拿，里面是随机道具。</li>
+          <li><b>爬坡</b>：上坡的耗油是平地的 1.8 倍；毒蜘蛛爬得最利索，奥丁挪一步都费油。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 战斗 ============ -->
+  <section id="screen-game" class="screen">
+    <canvas id="stage"></canvas>
+
+    <div class="hud">
+      <!-- 风力 / 计时 -->
+      <div class="hud-top-center">
+        <div class="wind-box">
+          <canvas id="wind-dial" width="112" height="112"></canvas>
+          <div class="wind-num"><span id="wind-val">0</span><i>风力</i></div>
+        </div>
+        <div class="timer" id="timer">30</div>
+      </div>
+
+      <div class="hud-top-right">
+        <button class="icon-btn" id="btn-guide" title="炮口指示线 (G)">瞄</button>
+        <button class="icon-btn" id="btn-mute" title="静音 (M)">音</button>
+        <button class="icon-btn" id="btn-pause" title="菜单 (Esc)">≡</button>
+      </div>
+
+      <!-- 当前战车状态 -->
+      <div class="hud-bottom-left">
+        <div class="unit-card" id="unit-card">
+          <div class="uc-head"><b id="uc-name">—</b><i id="uc-tag"></i></div>
+          <div class="meter"><span class="mlabel">耐久</span><div class="mbar"><div id="bar-hp" class="mfill hp"></div></div><em id="txt-hp">0</em></div>
+          <div class="meter"><span class="mlabel">燃料</span><div class="mbar"><div id="bar-fu" class="mfill fu"></div><div id="bar-cost" class="mcost"></div></div><em id="txt-fu">0</em></div>
+          <div class="uc-foot">
+            <span>本回合耗油 <b id="txt-spent">0</b></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 武器 -->
+      <div class="hud-bottom-center" id="panel-action">
+        <div class="weapons" id="weapons"></div>
+        <div class="power-wrap">
+          <div class="power-bar">
+            <div id="power-fill"></div>
+            <div class="power-ticks"></div>
+            <div id="power-mark" class="power-mark" hidden></div>
+          </div>
+          <div class="aim-read">角度 <b id="aim-val">45</b>° · 力度 <b id="pow-val">0</b><span id="pow-last"></span></div>
+        </div>
+      </div>
+
+      <div class="hud-bottom-right">
+        <div class="item-tip" id="item-tip"></div>
+        <div class="items" id="item-bar"></div>
+        <div class="hint" id="hint">← → 移动　↑ ↓ 角度　空格 蓄力发射</div>
+      </div>
+
+      <div class="ticker" id="ticker"></div>
+      <div class="turn-flash" id="turn-flash"></div>
+    </div>
+
+    <!-- 触屏操作 -->
+    <div class="touch" id="touch">
+      <button class="tbtn" data-k="ArrowLeft">◀</button>
+      <button class="tbtn" data-k="ArrowRight">▶</button>
+      <button class="tbtn" data-k="ArrowUp">▲</button>
+      <button class="tbtn" data-k="ArrowDown">▼</button>
+      <button class="tbtn tfire" data-k="Space">发射</button>
+    </div>
+
+    <!-- 暂停 -->
+    <div class="overlay" id="overlay-pause">
+      <div class="dialog">
+        <h3>暂停</h3>
+        <button class="btn btn-primary" id="btn-resume">继续战斗</button>
+        <button class="btn" id="btn-restart">重新开战</button>
+        <button class="btn btn-ghost" id="btn-quit">返回大厅</button>
+      </div>
+    </div>
+
+    <!-- 结算 -->
+    <div class="overlay" id="overlay-result">
+      <div class="dialog wide">
+        <h3 id="result-title">胜利</h3>
+        <div id="result-body" class="result-body"></div>
+        <div class="row">
+          <button class="btn btn-primary" id="btn-again">再来一局</button>
+          <button class="btn btn-ghost" id="btn-lobby">返回大厅</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/terrain.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/render.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

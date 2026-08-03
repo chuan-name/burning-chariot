@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>界面自检</title>
+<style>
+  html, body { margin: 0; background: #000; }
+  iframe { display: block; width: 1280px; height: 760px; border: 0; }
+</style>
+</head>
+<body>
+<iframe id="f" src="../index.html"></iframe>
+<pre id="report" style="color:#9f9;font:12px monospace;padding:8px"></pre>
+<script>
+/* 用 headless Chrome 跑：
+   ?stage=title|setup|codex|battle|fire  决定截图停在哪个界面
+   stage=fire 会模拟真人按键（移动 / 调角度 / 蓄力发射）并把结果写进 #report。
+   浏览器需带 --allow-file-access-from-files 才能操作 iframe。 */
+var stage = new URLSearchParams(location.search).get('stage') || 'battle';
+
+function key(w, type, k) {
+  w.dispatchEvent(new w.KeyboardEvent(type, { key: k, bubbles: true }));
+}
+
+document.getElementById('f').onload = function () {
+  var d = this.contentDocument;
+  var w = this.contentWindow;
+  if (w.RZ && w.RZ.SFX) w.RZ.SFX.setMuted(true);
+  if (stage === 'title') return;
+  d.querySelector('[data-go="' + (stage === 'codex' ? 'codex' : 'setup') + '"]').click();
+  if (stage === 'setup' || stage === 'codex') return;
+  setTimeout(function () { d.getElementById('btn-start').click(); }, 60);
+
+  if (stage === 'enemy') {                      // 电脑回合：面板不能显示电脑的读数
+    // headless 的 rAF 只跑两帧，所以必须赶在第一帧之前把状态摆好
+    setTimeout(function () {
+      var g = w.__game;
+      var me = g.units[0], foe = g.units[1];
+      me.lastPower = 58; me.aim = 38; me.energy = 45;
+      g.active = foe;                           // 电脑正在瞄准，读数很显眼
+      foe.power = 93; foe.aim = 74; foe.weaponIdx = 1; foe.energy = 100;
+      g.charging = true;
+      g.aiTimer = 999999;                       // 让电脑一直停在瞄准状态，便于截图
+      setTimeout(function () {            // 仅供参考：headless 下 rAF 是否跑过并不确定
+        document.getElementById('report').textContent = [
+          '面板战车 = ' + d.getElementById('uc-name').textContent + ' / ' + d.getElementById('uc-tag').textContent,
+          '角度 = ' + d.getElementById('aim-val').textContent + '（电脑实际 ' + foe.aim + '）',
+          '力度 = ' + d.getElementById('pow-val').textContent + '（电脑实际 ' + Math.round(foe.power) + '）',
+          '蓄力条宽度 = ' + d.getElementById('power-fill').style.width,
+          '能量 = ' + d.getElementById('txt-en').textContent + '（电脑实际 ' + foe.energy + '）',
+          '面板置灰 = ' + d.getElementById('panel-action').classList.contains('standby')
+        ].join('\n');
+      }, 8000);
+    }, 70);
+    return;
+  }
+  if (stage === 'pause') {                      // 暂停 → 恢复，蓄力状态必须处理正确
+    var out = [];
+    setTimeout(function () {
+      var g = w.__game, btn = d.getElementById('btn-pause');
+
+      // 电脑正在蓄力时暂停：恢复后必须还在蓄力，否则电脑会僵住
+      g.active.ai = true;
+      g.charging = true; g.active.power = 37;
+      btn.click();
+      out.push('电脑蓄力中暂停 → charging=' + g.charging + ' power=' + g.active.power.toFixed(0));
+      btn.click();
+      out.push('恢复后 → charging=' + g.charging + ' power=' + g.active.power.toFixed(0));
+
+      // 玩家蓄力时暂停、期间松手：这一发作废，不能走火
+      g.active.ai = false;
+      g.charging = true; g.active.power = 44;
+      btn.click(); btn.click();
+      out.push('玩家蓄力中暂停并松手 → charging=' + g.charging + ' power=' + g.active.power.toFixed(0) +
+               ' phase=' + g.phase + ' 弹数=' + g.projectiles.length);
+
+      document.getElementById('report').textContent = out.join('\n');
+    }, 400);
+    return;
+  }
+  if (stage === 'items' || stage === 'itemarmed') {   // 道具栏 / 选中待确认
+    setTimeout(function () {
+      var g = w.__game;
+      g.active.items = ['double', 'power', 'fly', 'stealth'];
+      g.active.aim = 40;
+      g.active.lastPower = 58;
+      if (stage === 'itemarmed') {
+        setTimeout(function () {
+          var slots = d.querySelectorAll('.islot');
+          if (slots[2]) slots[2].click();          // 点一下「飞行」，进入待确认
+        }, 900);
+      }
+    }, 300);
+    return;
+  }
+  if (stage === 'ultimate') {                   // 选中必杀：预告要让对手连打几手
+    setTimeout(function () {
+      var g = w.__game;
+      g.active.fuel = 200;
+      g.active.weaponIdx = 2;
+      g.active.lastPower = 58;
+      g.active.aim = 40;
+    }, 300);
+    return;
+  }
+  if (stage === 'aimline') {                    // 看炮口指示线与蓄力条上的上次刻度
+    setTimeout(function () {
+      var g = w.__game;
+      g.active.aim = 34;
+      g.active.lastPower = 58;
+      g.active.power = 41;
+      g.charging = true;
+    }, 300);
+    return;
+  }
+  if (stage === 'result') {                     // 直接判定敌方阵亡，看结算界面
+    setTimeout(function () {
+      var g = w.__game;
+      g.log.push({ by: 0, dmg: 640 }, { by: 1, dmg: 210 });
+      g.units[0].hp = 318;
+      g.kill(g.units[1]);
+      g.checkWin();
+    }, 300);
+    return;
+  }
+  if (stage !== 'fire') return;
+
+  var log = [];
+  var snap = function (tag) {
+    var g = w.__game || null;
+    log.push(tag + ': ' + (g ? 'phase=' + g.phase + ' aim=' + g.active.aim.toFixed(1) +
+      ' power=' + g.active.power.toFixed(1) + ' fuel=' + g.active.fuel.toFixed(0) +
+      ' x=' + g.active.x.toFixed(0) + ' 弹数=' + g.projectiles.length : '无对局'));
+  };
+  setTimeout(function () {
+    snap('开局');
+    key(w, 'keydown', '2'); key(w, 'keyup', '2');            // 切二号武器
+    key(w, 'keydown', 'ArrowUp');                             // 抬炮
+  }, 400);
+  setTimeout(function () { key(w, 'keyup', 'ArrowUp'); key(w, 'keydown', 'ArrowRight'); }, 700);
+  setTimeout(function () { key(w, 'keyup', 'ArrowRight'); snap('移动+抬炮后'); key(w, 'keydown', ' '); }, 1000);
+  setTimeout(function () { snap('蓄力中'); key(w, 'keyup', ' '); }, 1500);
+  setTimeout(function () { snap('发射后'); }, 1600);
+  setTimeout(function () {
+    snap('两秒后');
+    var g = w.__game;
+    log.push('武器=' + (g ? g.active.vehicle[['w1','w2','ss'][g.active.weaponIdx]].name : '?'));
+    document.getElementById('report').textContent = log.join('\n');
+    document.title = 'REPORT ' + log.join(' | ');
+  }, 3600);
+};
+</script>
+</body>
+</html>

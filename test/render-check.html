@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>渲染自检</title>
+<style>
+  body { margin: 0; background: #05070a; }
+  canvas { display: block; width: 1100px; height: 620px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1100" height="620"></canvas>
+<script src="../js/data.js"></script>
+<script src="../js/terrain.js"></script>
+<script src="../js/physics.js"></script>
+<script src="../js/render.js"></script>
+<script src="../js/audio.js"></script>
+<script src="../js/ai.js"></script>
+<script src="../js/game.js"></script>
+<script>
+/* 供 headless Chrome 截图用：跑若干帧 AI 对战后画一帧。
+   ?map=sky&frames=400&veh=honglong 可指定地图/帧数/我方战车。 */
+(function () {
+  var q = new URLSearchParams(location.search);
+  var mapId = q.get('map') || 'dry';
+  var frames = parseInt(q.get('frames') || '260', 10);
+  var pick = function (id, fallback) { return id ? RZ.vehicleById(id) : fallback; };
+
+  RZ.SFX.setMuted(true);
+  var n = parseInt(q.get('n') || '2', 10);
+  var roster = [];
+  for (var k = 0; k < n; k++) {
+    var v = k === 0 ? pick(q.get('veh'), RZ.VEHICLES[0])
+          : k === 1 ? pick(q.get('veh2'), RZ.VEHICLES[1])
+          : RZ.VEHICLES[(k * 3) % RZ.VEHICLES.length];
+    roster.push({ vehicle: v, team: k % 2, ai: true, name: v.name });
+  }
+  var game = new RZ.Game({
+    mapId: mapId, roster: roster,
+    difficulty: 'hard', guide: true, humanTeam: null
+  });
+  var cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  game.viewW = cv.width; game.viewH = cv.height;
+  game.cam.x = game.cam.tx = Math.max(0, game.active.x - cv.width / 2);
+  game.cam.y = game.cam.ty = Math.max(0, game.active.y - cv.height / 2);
+  game.cam.shake = 0;
+
+  for (var i = 0; i < frames; i++) game.update(16);
+  game.cam.shake = 0;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  game.draw(ctx, cv.width, cv.height);
+  document.title = '渲染自检 · ' + game.map.name + ' · 回合' + game.turnNo;
+  window.__done = true;
+})();
+</script>
+</body>
+</html>

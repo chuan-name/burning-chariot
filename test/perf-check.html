@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>性能自检</title>
+<style>
+  body { margin: 0; background: #05070a; color: #9f9; font: 13px/1.7 monospace; }
+  canvas { display: block; width: 1100px; height: 620px; }
+  pre { padding: 10px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1100" height="620"></canvas>
+<pre id="r">测量中…</pre>
+<script src="../js/data.js"></script>
+<script src="../js/terrain.js"></script>
+<script src="../js/physics.js"></script>
+<script src="../js/render.js"></script>
+<script src="../js/audio.js"></script>
+<script src="../js/ai.js"></script>
+<script src="../js/game.js"></script>
+<script>
+/* 逐项测每帧开销：rAF 在 headless 下不推进，所以手动循环调用并计时。
+   ?map=dry&n=300 指定地图与采样帧数。 */
+(function () {
+  var q = new URLSearchParams(location.search);
+  var N = parseInt(q.get('n') || '300', 10);
+  RZ.SFX.setMuted(true);
+
+  var cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  var v1 = RZ.VEHICLES[0], v2 = RZ.VEHICLES[4];
+  var game = new RZ.Game({
+    mapId: q.get('map') || 'dry', difficulty: 'normal', guide: true, humanTeam: 0,
+    roster: [{ vehicle: v1, team: 0, ai: false, name: '我方' },
+             { vehicle: v2, team: 1, ai: true, name: '电脑' }]
+  });
+  game.viewW = cv.width; game.viewH = cv.height;
+
+  function time(label, fn, iters) {
+    var t0 = performance.now();
+    for (var i = 0; i < iters; i++) fn(i);
+    return { label: label, ms: (performance.now() - t0) / iters };
+  }
+
+  var rows = [];
+  // 先炸几个坑、撒一堆粒子，模拟打了一阵之后的场面
+  for (var k = 0; k < 6; k++) {
+    game.explode(400 + k * 160, game.terrain.groundBelow(400 + k * 160, 0), v1.w1, game.units[0], null);
+  }
+  game.active = game.units[0];
+  game.charging = true;
+
+  rows.push(time('game.update()', function () { game.update(16); }, N));
+  rows.push(time('game.draw() 全部', function () { game.draw(ctx, cv.width, cv.height); }, N));
+
+  // 拆开看：地形贴图 vs 背景 vs 其它
+  rows.push(time('  └ 背景 bg.draw()', function () {
+    ctx.save(); game.bg.draw(ctx, game.cam, game.t, game.night); ctx.restore();
+  }, N));
+  rows.push(time('  └ 地形 drawImage', function () {
+    ctx.save(); ctx.drawImage(game.terrain.canvas, 0, 0); ctx.restore();
+  }, N));
+  rows.push(time('  └ 粒子 fx.draw()', function () {
+    ctx.save(); game.fx.draw(ctx); ctx.restore();
+  }, N));
+  rows.push(time('  └ 十辆战车 drawUnit', function () {
+    ctx.save();
+    for (var i = 0; i < game.units.length; i++) RZ.drawUnit(ctx, game.units[i], game.t, {});
+    ctx.restore();
+  }, N));
+
+  var total = rows[0].ms + rows[1].ms;
+  var out = rows.map(function (r) {
+    return r.label.padEnd(22) + r.ms.toFixed(2).padStart(7) + ' ms';
+  }).join('\n');
+  out += '\n' + '-'.repeat(34) + '\n';
+  out += 'update + draw 合计'.padEnd(22) + total.toFixed(2).padStart(7) + ' ms';
+  out += '\n60fps 预算 16.7ms → ' + (total < 16.7 ? '够用（' : '超支（') + (total / 16.7 * 100).toFixed(0) + '% 预算）';
+  out += '\n粒子数 ' + game.fx.list.length;
+  document.getElementById('r').textContent = out;
+  document.title = 'PERF ' + total.toFixed(2) + 'ms';
+})();
+</script>
+</body>
+</html>
