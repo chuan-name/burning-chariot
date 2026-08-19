@@ -17,16 +17,34 @@ const chrome = candidates.find(file => file && fs.existsSync(file));
 if (!chrome) { console.log('SKIP 未找到 Chrome/Edge，跳过浏览器 LAN 冒烟测试'); process.exit(0); }
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-async function targets(port) {
-  for (let i = 0; i < 50; i++) {
-    try {
-      const list = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json();
-      const page = list.find(item => item.type === 'page');
-      if (page) return page;
-    } catch (_) {}
-    await sleep(100);
+function chromeError(message, proc, getStderr, exit) {
+  const state = exit || { code: proc.exitCode, signal: proc.signalCode };
+  return new Error([
+    message,
+    'Chrome executable: ' + chrome,
+    'exit code: ' + (state.code == null ? '(not exited)' : state.code),
+    'signal: ' + (state.signal || '(none)'),
+    'Chrome stderr (last 8 KB):',
+    getStderr() || '(empty)'
+  ].join('\n'));
+}
+async function targets(port, proc, getStderr, exitPromise) {
+  for (let i = 0; i < 100; i++) {
+    const result = await Promise.race([
+      (async () => {
+        try {
+          const list = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json();
+          return { page: list.find(item => item.type === 'page') };
+        } catch (_) { return {}; }
+      })(),
+      exitPromise.then(exit => ({ exit }))
+    ]);
+    if (result.exit) throw chromeError('Chrome 在 DevTools 准备完成前退出', proc, getStderr, result.exit);
+    if (result.page) return result.page;
+    const exit = await Promise.race([sleep(200).then(() => null), exitPromise]);
+    if (exit) throw chromeError('Chrome 在 DevTools 准备完成前退出', proc, getStderr, exit);
   }
-  throw new Error('Chrome DevTools 未就绪');
+  throw chromeError('Chrome DevTools 未就绪', proc, getStderr);
 }
 function cdp(url) {
   const socket = new WebSocket(url), pending = new Map(); let id = 0;
@@ -56,13 +74,29 @@ async function evaluate(client, expression) {
 async function openChrome(gamePort, debugPort, suffix) {
   const profile = path.join(os.tmpdir(), 'burning-chariot-chrome-' + process.pid + '-' + suffix);
   const proc = spawn(chrome, [
-    '--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check',
+    '--headless=new', '--disable-gpu', '--disable-dev-shm-usage', '--no-sandbox', '--hide-scrollbars',
+    '--no-first-run', '--no-default-browser-check', '--remote-debugging-address=127.0.0.1',
     '--remote-debugging-port=' + debugPort, '--user-data-dir=' + profile,
     'http://127.0.0.1:' + gamePort + '/'
-  ], { stdio: 'ignore', windowsHide: true });
-  const page = await targets(debugPort), client = cdp(page.webSocketDebuggerUrl);
-  await client.ready; await client.call('Runtime.enable'); await sleep(500);
-  return { proc, client };
+  ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+  let stderr = Buffer.alloc(0);
+  proc.stderr.on('data', chunk => {
+    stderr = Buffer.concat([stderr, Buffer.from(chunk)]);
+    if (stderr.length > 8192) stderr = stderr.subarray(stderr.length - 8192);
+  });
+  const getStderr = () => stderr.toString('utf8').trim();
+  const exitPromise = new Promise(resolve => {
+    proc.once('error', error => resolve({ code: proc.exitCode, signal: proc.signalCode, error }));
+    proc.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  try {
+    const page = await targets(debugPort, proc, getStderr, exitPromise), client = cdp(page.webSocketDebuggerUrl);
+    await client.ready; await client.call('Runtime.enable'); await sleep(500);
+    return { proc, client };
+  } catch (error) {
+    if (!proc.killed) proc.kill();
+    throw error;
+  }
 }
 
 (async function () {
