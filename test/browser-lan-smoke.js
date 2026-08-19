@@ -47,13 +47,20 @@ async function targets(port, proc, getStderr, exitPromise) {
   throw chromeError('Chrome DevTools 未就绪', proc, getStderr);
 }
 function cdp(url) {
-  const socket = new WebSocket(url), pending = new Map(); let id = 0;
+  const socket = new WebSocket(url), pending = new Map(), runtimeExceptions = []; let id = 0;
   socket.on('message', raw => {
-    const msg = JSON.parse(raw.toString()), pair = pending.get(msg.id);
+    const msg = JSON.parse(raw.toString());
+    if (msg.method === 'Runtime.exceptionThrown') {
+      runtimeExceptions.push(msg.params.exceptionDetails);
+      if (runtimeExceptions.length > 20) runtimeExceptions.shift();
+      return;
+    }
+    const pair = pending.get(msg.id);
     if (!pair) return; pending.delete(msg.id);
     if (msg.error) pair.reject(new Error(msg.error.message)); else pair.resolve(msg.result);
   });
   return {
+    runtimeExceptions,
     ready: new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); }),
     call(method, params) {
       return new Promise((resolve, reject) => {
@@ -69,6 +76,47 @@ async function evaluate(client, expression) {
   const out = await client.call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
   if (out.exceptionDetails) throw new Error('页面脚本异常: ' + JSON.stringify(out.exceptionDetails));
   return out.result.value;
+}
+
+async function waitForGameReady(client, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let state = { readyState: '(unknown)', rz: '(unknown)', game: '(unknown)', network: '(unknown)' };
+  let evaluateError = null;
+  while (Date.now() < deadline) {
+    try {
+      state = await evaluate(client, `(() => {
+        const rz = typeof window.RZ;
+        return {
+          readyState: document.readyState,
+          rz,
+          game: rz === 'object' && window.RZ ? typeof window.RZ.Game : 'undefined',
+          network: rz === 'object' && window.RZ ? typeof window.RZ.LanClient : 'undefined'
+        };
+      })()`);
+      evaluateError = null;
+      if (state.readyState === 'complete' && state.rz === 'object' &&
+          state.game === 'function' && state.network === 'function') return;
+    } catch (error) {
+      evaluateError = error;
+    }
+    await sleep(150);
+  }
+  const exceptions = client.runtimeExceptions.map((details, index) => {
+    const exception = details.exception || {};
+    const text = exception.description || exception.value || details.text || JSON.stringify(details);
+    const location = details.url ? details.url + ':' + (details.lineNumber + 1) + ':' + (details.columnNumber + 1) : '';
+    return '[' + (index + 1) + '] ' + text + (location ? '\n    at ' + location : '');
+  });
+  throw new Error([
+    '游戏脚本就绪超时',
+    'document.readyState: ' + state.readyState,
+    'typeof window.RZ: ' + state.rz,
+    'typeof RZ.Game: ' + state.game,
+    'typeof RZ.LanClient: ' + state.network,
+    evaluateError ? '最后一次状态检查错误: ' + evaluateError.message : '',
+    'Runtime.exceptionThrown:',
+    exceptions.length ? exceptions.join('\n') : '(none)'
+  ].filter(Boolean).join('\n'));
 }
 
 async function openChrome(gamePort, debugPort, suffix) {
@@ -91,7 +139,7 @@ async function openChrome(gamePort, debugPort, suffix) {
   });
   try {
     const page = await targets(debugPort, proc, getStderr, exitPromise), client = cdp(page.webSocketDebuggerUrl);
-    await client.ready; await client.call('Runtime.enable'); await sleep(500);
+    await client.ready; await client.call('Runtime.enable'); await waitForGameReady(client, 20000);
     return { proc, client };
   } catch (error) {
     if (!proc.killed) proc.kill();
