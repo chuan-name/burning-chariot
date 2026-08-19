@@ -18,10 +18,53 @@
       <p class="sub">BURNING&nbsp;CHARIOT</p>
       <nav class="menu">
         <button class="btn btn-primary" data-go="setup">开始战斗</button>
+        <button class="btn" id="btn-lan-menu">局域网对战</button>
         <button class="btn" data-go="codex">战车图鉴</button>
         <button class="btn" data-go="help">玩法说明</button>
       </nav>
       <p class="foot">调整角度与力度，算准风力，把对面从地图上抹掉。</p>
+    </div>
+  </section>
+
+  <!-- ============ 局域网大厅 ============ -->
+  <section id="screen-lan" class="screen">
+    <header class="bar">
+      <button class="btn btn-ghost" id="btn-lan-back">← 返回</button>
+      <h2>局域网对战 · 1 v 1</h2>
+      <span id="lan-connection" class="lan-connection">未连接</span>
+    </header>
+    <div class="lan-wrap">
+      <div class="panel lan-panel" id="lan-entry">
+        <h3 class="panel-h">创建或加入房间</h3>
+        <p class="lan-help">房主创建 6 位房间号；另一位玩家在同一局域网打开本页面后输入房间号。</p>
+        <button class="btn btn-primary" id="btn-create-room">创建房间</button>
+        <div class="lan-divider"><span>或者</span></div>
+        <div class="lan-join-row">
+          <input id="lan-room-input" class="lan-input" inputmode="numeric" maxlength="6" placeholder="输入 6 位房间号">
+          <button class="btn" id="btn-join-room">加入房间</button>
+        </div>
+        <p id="lan-entry-status" class="lan-status"></p>
+      </div>
+
+      <div class="panel lan-panel" id="lan-room" hidden>
+        <div class="lan-room-head">
+          <div><span>房间号</span><b id="lan-room-id">------</b></div>
+          <button class="btn btn-ghost" id="btn-leave-room">离开房间</button>
+        </div>
+        <p id="lan-room-status" class="lan-status">等待另一名玩家加入...</p>
+        <div class="lan-players">
+          <div class="lan-player" id="lan-player-1">
+            <i>PLAYER 1 · 房主</i><b id="lan-name-1">等待中</b><span id="lan-ready-1">未准备</span>
+          </div>
+          <div class="lan-vs">VS</div>
+          <div class="lan-player" id="lan-player-2">
+            <i>PLAYER 2</i><b id="lan-name-2">等待加入</b><span id="lan-ready-2">未准备</span>
+          </div>
+        </div>
+        <label class="lan-select-label" for="lan-vehicle">选择你的战车</label>
+        <select id="lan-vehicle" class="lan-select"></select>
+        <button class="btn btn-primary" id="btn-lan-ready">准备</button>
+      </div>
     </div>
   </section>
 
@@ -208,6 +251,15 @@
         </div>
       </div>
     </div>
+
+    <!-- 联机中断（只暂停权威端，不推进错误回合） -->
+    <div class="overlay" id="overlay-network">
+      <div class="dialog">
+        <h3>联机已暂停</h3>
+        <p id="network-pause-text" class="lan-status">对方已断线</p>
+        <button class="btn btn-ghost" id="btn-network-quit">返回主菜单</button>
+      </div>
+    </div>
   </section>
 </div>
 
@@ -218,6 +270,7 @@
 <script src="js/audio.js"></script>
 <script src="js/ai.js"></script>
 <script src="js/game.js"></script>
+<script src="js/network.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>
