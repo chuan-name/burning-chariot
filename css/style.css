@@ -112,7 +112,7 @@ html, body {
   -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 6px 0 #5a1a06) drop-shadow(0 0 34px rgba(255,120,30,.55));
 }
-.logo-hot { filter: drop-shadow(0 0 22px rgba(255,80,0,.8)); }
+.logo-hot { filter: none; }
 .sub { font-size: 13px; letter-spacing: .78em; color: #8d6a49; margin: 14px 0 34px; }
 .menu { display: flex; flex-direction: column; gap: 12px; width: 240px; margin: 0 auto; }
 .menu .btn { width: 100%; padding: 14px; font-size: 16px; }

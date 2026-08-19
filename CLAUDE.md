@@ -22,9 +22,17 @@ open index.html            # 玩
 node test/run.js           # 全部单机无头回归测试（191 项，跑完要几分钟）
 node test/lan-server.js    # HTTP / WebSocket / 房间 / 协议测试
 node test/lan-game.js      # Action / 可见状态 / 地形同步测试
-npm test                   # 以上三组一起跑
+node test/browser-lan-smoke.js # 双浏览器 LAN 冒烟；缺少 Chrome/Edge 时明确跳过
+npm test                   # 以上四组一起跑
+npm run lint               # JS 与 JSON 轻量语法检查
+npm run coverage           # c8 行/分支覆盖率门禁（两项均至少 50%）
+npm run test:compat        # Chrome 102 / Node 12 构建兼容性
 npm run build:exe          # 构建 release/Burning-Chariot/BurningChariot.exe
+npm run build:win7         # 构建 Windows 7 SP1 x64 / Chrome 102 发行目录
 ```
+
+GitHub Actions 的触发条件、产物、权限和 Win7 启动器回退方案见
+[`CI/CD 与发布说明`](.github/CI-CD.md)。
 
 `test/run.js` 按主题分节，改哪块就重点看哪节：
 

@@ -1,0 +1,258 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  lint:
+    name: Lint / static check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check JavaScript and JSON syntax
+        run: npm run lint
+
+  test:
+    name: Automated tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run game, LAN and browser smoke tests
+        run: npm test
+
+  compatibility:
+    name: Chrome 102 / Node 12 compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run compatibility checks
+        run: npm run test:compat
+
+  coverage:
+    name: Coverage (lines and branches >= 50%)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run c8 coverage gate
+        run: npm run coverage
+
+  build-windows:
+    name: Build Windows x64
+    needs:
+      - lint
+      - test
+      - compatibility
+      - coverage
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build modern Windows distribution
+        run: npm run build:exe
+      - name: Verify and compress complete distribution
+        shell: pwsh
+        run: |
+          $required = @(
+            '.\release\Burning-Chariot\BurningChariot.exe',
+            '.\release\Burning-Chariot\game\index.html',
+            '.\release\Burning-Chariot\game\css\style.css',
+            '.\release\Burning-Chariot\game\js\main.js'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Missing release file: $file"
+            }
+          }
+          Compress-Archive `
+            -Path '.\release\Burning-Chariot' `
+            -DestinationPath '.\release\Burning-Chariot-Windows-x64.zip' `
+            -CompressionLevel Optimal `
+            -Force
+          if ((Get-Item -LiteralPath '.\release\Burning-Chariot-Windows-x64.zip').Length -le 0) {
+            throw 'Modern Windows ZIP is empty.'
+          }
+      - name: Upload Windows x64 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64-build
+          path: release/Burning-Chariot-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  build-win7:
+    name: Build Windows 7 x64 / Chrome 102
+    needs:
+      - lint
+      - test
+      - compatibility
+      - coverage
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    env:
+      BC_WIN7_LAUNCHER: native
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Cache verified Node.js 12 runtime
+        uses: actions/cache@v5
+        with:
+          path: build/win7-runtime-cache
+          key: ${{ runner.os }}-win7-node12.22.12-${{ hashFiles('scripts/build-win7.js', 'scripts/win7-launcher.c', 'scripts/win7-launcher.cs') }}
+      - name: Build Windows 7 distribution
+        run: npm run build:win7
+      - name: Verify compatibility manifest and compress complete distribution
+        shell: pwsh
+        run: |
+          $root = '.\release\Burning-Chariot-Win7-x64'
+          $required = @(
+            "$root\BurningChariot-Win7.exe",
+            "$root\compatibility.json",
+            "$root\使用说明-Windows7.txt",
+            "$root\game\index.html",
+            "$root\runtime\node.exe",
+            "$root\server\win7-server.cjs"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Missing release file: $file"
+            }
+          }
+          $manifest = Get-Content -LiteralPath "$root\compatibility.json" -Raw | ConvertFrom-Json
+          if ($manifest.browserJavaScriptTarget -ne 'chrome102') { throw 'Unexpected browser target.' }
+          if ($manifest.serverRuntime -ne 'Official Node.js 12.22.12 x64') { throw 'Unexpected server runtime.' }
+          if ($manifest.launcherFramework -notlike 'Native Win32 x64*') { throw 'CI did not build the verified native Win7 launcher.' }
+          $expectedNodeHash = 'b014e4ec5ca810b2fb54cdbf6ab8d6acc488285c98469606efb8b412472bec2a'
+          $actualNodeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "$root\runtime\node.exe").Hash.ToLowerInvariant()
+          if ($actualNodeHash -ne $expectedNodeHash) { throw "Node runtime hash mismatch: $actualNodeHash" }
+          Compress-Archive `
+            -Path $root `
+            -DestinationPath '.\release\Burning-Chariot-Win7-x64-Chrome102.zip' `
+            -CompressionLevel Optimal `
+            -Force
+          if ((Get-Item -LiteralPath '.\release\Burning-Chariot-Win7-x64-Chrome102.zip').Length -le 0) {
+            throw 'Windows 7 ZIP is empty.'
+          }
+      - name: Upload Windows 7 x64 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-7-x64-build
+          path: release/Burning-Chariot-Win7-x64-Chrome102.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - build-windows
+      - build-win7
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows x64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-x64-build
+          path: dist
+      - name: Download Windows 7 x64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-7-x64-build
+          path: dist
+      - name: Generate and verify SHA256 checksums
+        working-directory: dist
+        run: |
+          sha256sum \
+            Burning-Chariot-Windows-x64.zip \
+            Burning-Chariot-Win7-x64-Chrome102.zip > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_NOTES: |
+            ## 下载
+
+            ### Windows 10 / Windows 11 x64
+
+            下载 `Burning-Chariot-Windows-x64.zip`，完整解压后运行 `BurningChariot.exe`。
+
+            ### Windows 7 SP1 x64
+
+            下载 `Burning-Chariot-Win7-x64-Chrome102.zip`，完整解压后运行 `BurningChariot-Win7.exe`。
+
+            该版本面向 Windows 7 SP1 x64，内置官方 Node.js 12.22.12 x64 运行时，浏览器脚本以 Google Chrome 102 为目标。
+
+            > Windows 7 与 Node.js 12 已停止官方安全维护，Win7 版本仅建议在可信局域网环境中运行。
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/Burning-Chariot-Windows-x64.zip \
+            dist/Burning-Chariot-Win7-x64-Chrome102.zip \
+            dist/SHA256SUMS.txt \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "$RELEASE_NOTES"

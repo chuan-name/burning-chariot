@@ -45,7 +45,7 @@ async function main() {
   });
 
   fs.copyFileSync(cachedNode, path.join(runtimeDir, 'node.exe'));
-  buildLauncher(exe);
+  const launcherFramework = buildLauncher(exe);
   fs.copyFileSync(path.join(root, 'index.html'), path.join(gameDir, 'index.html'));
   copyDir(path.join(root, 'css'), path.join(gameDir, 'css'));
   compileBrowserScripts(path.join(root, 'js'), path.join(gameDir, 'js'));
@@ -57,7 +57,7 @@ async function main() {
     browserJavaScriptTarget: 'chrome102',
     serverRuntime: 'Official Node.js ' + NODE_VERSION + ' x64',
     serverRuntimeSha256: NODE_SHA256,
-    launcherFramework: '.NET Framework 3.5 Client/Full Profile',
+    launcherFramework,
     port: 3000
   };
   fs.writeFileSync(path.join(releaseDir, 'compatibility.json'), JSON.stringify(manifest, null, 2) + '\n');
@@ -112,15 +112,108 @@ function sha256(file) {
 
 function buildLauncher(output) {
   const csc = 'C:\\Windows\\Microsoft.NET\\Framework\\v3.5\\csc.exe';
-  if (!fs.existsSync(csc)) throw new Error('未找到 Windows/.NET 3.5 C# 编译器：' + csc);
+  const requested = process.env.BC_WIN7_LAUNCHER || 'auto';
+  if (requested !== 'native' && fs.existsSync(csc)) {
+    compileDotNet35Launcher(csc, output);
+    return '.NET Framework 3.5 Client/Full Profile';
+  }
+  if (requested === 'dotnet35') {
+    throw new Error('BC_WIN7_LAUNCHER=dotnet35，但未找到 Windows/.NET 3.5 C# 编译器：' + csc);
+  }
+  compileNativeLauncher(output);
+  return 'Native Win32 x64 (Windows 7 subsystem 6.01; no .NET dependency)';
+}
+
+function compileDotNet35Launcher(csc, output) {
   const source = path.join(root, 'scripts', 'win7-launcher.cs');
   const result = spawnSync(csc, [
     '/nologo', '/target:exe', '/platform:x64', '/optimize+', '/out:' + output, source
   ], { cwd: root, encoding: 'utf8' });
+  finishCompiler(result, 'Windows 7 .NET 3.5 启动器');
+}
+
+function compileNativeLauncher(output) {
+  const installation = findVisualStudio();
+  const toolsRoot = path.join(installation, 'VC', 'Tools', 'MSVC');
+  const compatible = fs.readdirSync(toolsRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && isWin7CompatibleToolset(entry.name))
+    .map(entry => entry.name)
+    .sort(compareVersions)
+    .pop();
+  if (!compatible) {
+    throw new Error('未找到可面向 Windows 7 的 MSVC v142/v143 工具集；VS 2026 v145 不支持 Windows 7。');
+  }
+
+  const vcvars = path.join(installation, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
+  const source = path.join(root, 'scripts', 'win7-launcher.c');
+  const object = path.join(buildDir, 'win7-launcher.obj');
+  const commandFile = path.join(buildDir, 'win7-native-build.cmd');
+  const toolsetFamily = compatible.split('.').slice(0, 2).join('.');
+  const commands = [
+    '@echo off',
+    'call ' + quoteCmd(vcvars) + ' -vcvars_ver=' + toolsetFamily + ' >nul',
+    'if errorlevel 1 exit /b %errorlevel%',
+    [
+      'cl.exe', '/nologo', '/c', '/O1', '/GS-', '/Zl', '/D_WIN32_WINNT=0x0601',
+      '/Fo' + quoteCmd(object), quoteCmd(source)
+    ].join(' '),
+    'if errorlevel 1 exit /b %errorlevel%',
+    [
+      'link.exe', '/nologo', '/NODEFAULTLIB', '/ENTRY:wWinMainCRTStartup',
+      '/SUBSYSTEM:CONSOLE,6.01', '/MACHINE:X64', '/INCREMENTAL:NO',
+      '/OUT:' + quoteCmd(output), quoteCmd(object), 'kernel32.lib'
+    ].join(' '),
+    'exit /b %errorlevel%',
+    ''
+  ];
+  fs.writeFileSync(commandFile, commands.join('\r\n'), 'utf8');
+  const result = spawnSync('cmd.exe', ['/d', '/c', commandFile], {
+    cwd: root, encoding: 'utf8'
+  });
+  finishCompiler(result, 'Windows 7 原生 Win32 启动器（MSVC ' + compatible + '）');
+}
+
+function findVisualStudio() {
+  const candidates = [
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Microsoft Visual Studio', 'Installer', 'vswhere.exe'),
+    'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe'
+  ].filter(Boolean);
+  const vswhere = candidates.find(file => fs.existsSync(file));
+  if (!vswhere) throw new Error('未找到 vswhere.exe，无法定位 Windows 7 兼容 MSVC 工具集。');
+  const result = spawnSync(vswhere, [
+    '-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+    '-property', 'installationPath'
+  ], { encoding: 'utf8' });
+  finishCompiler(result, 'Visual Studio 检测');
+  const installation = (result.stdout || '').trim();
+  if (!installation) throw new Error('vswhere.exe 未返回 Visual Studio 安装目录。');
+  return installation;
+}
+
+function isWin7CompatibleToolset(version) {
+  const parts = version.split('.').map(Number);
+  return parts[0] === 14 && parts[1] >= 29 && parts[1] <= 44;
+}
+
+function compareVersions(left, right) {
+  const a = left.split('.').map(Number);
+  const b = right.split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const difference = (a[i] || 0) - (b[i] || 0);
+    if (difference) return difference;
+  }
+  return 0;
+}
+
+function quoteCmd(value) {
+  return '"' + String(value).replace(/"/g, '""') + '"';
+}
+
+function finishCompiler(result, label) {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error('Windows 7 启动器编译失败，退出码 ' + result.status);
+  if (result.status !== 0) throw new Error(label + '失败，退出码 ' + result.status);
 }
 
 function compileBrowserScripts(from, to) {

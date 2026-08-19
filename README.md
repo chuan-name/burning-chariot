@@ -133,9 +133,14 @@ EXE 使用当前 Node.js 官方 SEA（Single Executable Application）流程构�
 目录，以便稳定分发和检查。未签名的本地构建可能触发 Windows SmartScreen；正式发布可再用
 代码签名证书签名，但这不影响局域网功能。
 
-`build:win7` 下载并校验 Node.js 官方 `12.22.12` Windows x64 运行时，用 Windows 自带的
-.NET 3.5 编译器生成轻量启动器，并用 esbuild 对发布目录中的每个浏览器脚本执行 `chrome102`
-目标转换。现代版与 Win7 版使用不同发行目录，互不覆盖。
+`build:win7` 下载并校验 Node.js 官方 `12.22.12` Windows x64 运行时；本地默认用 Windows
+自带的 .NET 3.5 编译器生成轻量启动器，CI 则在该编译器缺失时使用同样兼容 Win7 的原生启动器。
+浏览器脚本统一由 esbuild 转换到 `chrome102` 目标。现代版与 Win7 版使用不同发行目录，互不覆盖。
+
+正式版本通过 GitHub Releases 发布：Windows 10/11 x64 下载
+`Burning-Chariot-Windows-x64.zip`，Windows 7 SP1 x64 + Chrome 102 下载
+`Burning-Chariot-Win7-x64-Chrome102.zip`。两个压缩包都必须完整解压后运行；发布流程详见
+[`CI/CD 与发布说明`](.github/CI-CD.md)。
 
 ---
 
