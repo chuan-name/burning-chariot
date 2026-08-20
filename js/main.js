@@ -36,6 +36,7 @@
     var client = new RZ.LanClient();
     lan = {
       client: client, playerId: 0, roomId: '', inBattle: false, pausedByNetwork: false,
+      lastHostPlayerId: null,
       players: {
         1: { connected: false, ready: false, vehicleId: setup.picks[0] },
         2: { connected: false, ready: false, vehicleId: setup.picks[1] }
@@ -175,7 +176,7 @@
 
   function resetLanRoom(message) {
     if (!lan) return;
-    lan.roomId = ''; lan.playerId = 0; lan.inBattle = false;
+    lan.roomId = ''; lan.playerId = 0; lan.inBattle = false; lan.lastHostPlayerId = null;
     lan.players[1].connected = lan.players[2].connected = false;
     lan.players[1].ready = lan.players[2].ready = false;
     $('lan-entry').hidden = false; $('lan-room').hidden = true;
@@ -458,7 +459,7 @@
   function startLanAuthoritativeGame(config) {
     if (!lan || lan.inBattle) return;
     lan.inBattle = true; lan.pausedByNetwork = false; lan.pendingConfig = config;
-    lan.lastSendAt = 0; lan.remoteCharging = false; lan.inputAt = 0;
+    lan.lastSendAt = 0; lan.lastHostPlayerId = null; lan.remoteCharging = false; lan.inputAt = 0;
     if (lan.playerId !== 1) {
       lanText('lan-room-status', '正在接收房主的战场状态...');
       return;
@@ -496,11 +497,21 @@
 
   function sendLanSnapshot(full) {
     if (!lan || !lan.inBattle || lan.playerId !== 1 || !game) return;
+    var now = performance.now ? performance.now() : Date.now();
+    // STATE_DELTA 可由下一份状态完全替代；积压时跳过旧帧，避免 TCP 队列把客户端越拖越慢。
+    if (!full && !lan.client.canSendVolatile()) { lan.lastSendAt = now; return false; }
     var state = game.visibleStateForPlayer(2, !!full);
-    lan.client.send({ type: full ? 'STATE_SNAPSHOT' : 'GAME_EVENT', event: full ? undefined : 'STATE_DELTA', state: state });
-    lan.client.send({ type: 'HOST_STATE', currentPlayerId: state.currentPlayerId, started: true });
+    if (lan.lastHostPlayerId !== state.currentPlayerId) {
+      if (!lan.client.send({ type: 'HOST_STATE', currentPlayerId: state.currentPlayerId, started: true })) return false;
+      lan.lastHostPlayerId = state.currentPlayerId;
+    }
+    var sent = full
+      ? lan.client.send({ type: 'STATE_SNAPSHOT', state: state })
+      : lan.client.sendVolatile({ type: 'GAME_EVENT', event: 'STATE_DELTA', state: state });
+    if (!sent) { lan.lastSendAt = now; return false; }
     game.networkDirty = null;
-    lan.lastSendAt = performance.now ? performance.now() : Date.now();
+    lan.lastSendAt = now;
+    return true;
   }
 
   function applyLanGameMessage(message) {
