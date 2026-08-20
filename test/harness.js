@@ -28,7 +28,9 @@ function loadRZ() {
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   for (const f of ['data.js', 'terrain.js', 'physics.js', 'render.js', 'audio.js', 'ai.js', 'game.js']) {
-    vm.runInContext(fs.readFileSync(path.join(ROOT, 'js', f), 'utf8'), sandbox, { filename: f });
+    const file = path.join(ROOT, 'js', f);
+    // 绝对路径让 V8/c8 能把 vm 中执行的传统浏览器脚本可靠映射回源码。
+    vm.runInContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
   }
   sandbox.RZ.SFX.setMuted(true);
   return sandbox.RZ;

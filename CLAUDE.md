@@ -8,9 +8,10 @@
 ## 1. 范围
 
 - 复刻新浪游戏大厅代理运营过的回合制战车对战游戏《燃烧战车》。
-- **纯前端，零依赖，零构建**：`open index.html` 就能玩。所有脚本用传统 `<script>` 标签
-  按顺序加载，共用一个 `window.RZ` 命名空间。不要引入模块打包、npm 依赖或 CDN 资源。
-- 单机为主：1v1 / 2v2（打电脑）/ 同屏双人。**没有服务器，也不做联网对战。**
+- **单机仍是纯前端，零依赖，零构建**：`open index.html` 就能玩。所有浏览器脚本用传统
+  `<script>` 标签按顺序加载，共用一个 `window.RZ` 命名空间。不要让单机依赖 Node 或 CDN。
+- 单机模式：1v1 / 2v2（打电脑）/ 同屏双人；另有可选的局域网 Host Authoritative 1v1。
+  只有主动进入「局域网对战」才连接 `server/server.js` 提供的 WebSocket。
 - 代码风格跟现有文件保持一致：ES5 风格的 `var` + `function`，注释用中文，
   说「为什么这么写」而不是复述代码。测试文件里可以用现代语法（只在 Node 跑）。
 
@@ -18,8 +19,20 @@
 
 ```sh
 open index.html            # 玩
-node test/run.js           # 全部无头回归测试（191 项，跑完要几分钟）
+node test/run.js           # 全部单机无头回归测试（191 项，跑完要几分钟）
+node test/lan-server.js    # HTTP / WebSocket / 房间 / 协议测试
+node test/lan-game.js      # Action / 可见状态 / 地形同步测试
+node test/browser-lan-smoke.js # 双浏览器 LAN 冒烟；缺少 Chrome/Edge 时明确跳过
+npm test                   # 以上四组一起跑
+npm run lint               # JS 与 JSON 轻量语法检查
+npm run coverage           # c8 行/分支覆盖率门禁（两项均至少 50%）
+npm run test:compat        # Chrome 102 / Node 12 构建兼容性
+npm run build:exe          # 构建 release/Burning-Chariot/BurningChariot.exe
+npm run build:win7         # 构建 Windows 7 SP1 x64 / Chrome 102 发行目录
 ```
+
+GitHub Actions 的触发条件、产物、权限和 Win7 启动器回退方案见
+[`CI/CD 与发布说明`](.github/CI-CD.md)。
 
 `test/run.js` 按主题分节，改哪块就重点看哪节：
 
@@ -58,6 +71,9 @@ js/audio.js       WebAudio 合成音效，无外部音频文件
 js/ai.js          电脑：粗扫角度/力度网格 + 局部精搜 + 挖墙模式
 js/game.js        规则中枢：轮次、燃料、道具、爆炸结算、镜头
 js/main.js        界面装配、输入、主循环。只负责把 game 的状态画进 DOM
+js/network.js     浏览器网络层：连接、房间、重连、Action 与消息收发，不含游戏规则
+server/           静态 HTTP、WebSocket、房间与 EXE 入口
+start-lan.bat     Windows 开发版一键启动
 test/harness.js   在 Node 里加载浏览器脚本（canvas 用桩件）
 test/run.js       回归测试主入口，按主题分节
 test/hud-writes.js 计数版 DOM 桩件 + 接管 rAF，测 HUD 每帧写了多少次 DOM、道具点选流程
@@ -70,6 +86,11 @@ test/hud-writes.js 计数版 DOM 桩件 + 接管 rAF，测 HUD 每帧写了多�
 **`main.js` 是个"哑"渲染层**：显示什么由 `game.hudState()`（纯函数）决定，
 `main.js` 只负责画。规则判断不要写进 `main.js`，否则没法测——
 「不能显示对手读数」这条规则就是靠它变成可直接断言的。
+
+**联网仍只有一套规则**：P1 浏览器持有权威 `Game`，P2 只发送语义 Action 并绘制可见状态镜像，
+不独立推进物理或回合。远端输入必须走 `Game.applyNetworkAction()`；发给 P2 的数据必须走
+`visibleStateForPlayer()`，不能序列化整个 `Game`。地形用 `Terrain` 的 RLE mask 快照校正，
+不传 Canvas 图片。断线时权威端必须暂停，不能继续推进回合。
 
 **HUD 是「变了才写」**：`updateHUD()` 每帧都跑，但所有 DOM 写入先比对缓存
 （`setText` / `setStyle` / `setHTML` / `setClass` / `setHidden`）。

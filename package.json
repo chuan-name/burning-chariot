@@ -1,0 +1,24 @@
+{
+  "name": "burning-chariot-lan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Burning Chariot LAN server",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "lint": "node scripts/check-syntax.js",
+    "test": "node test/run.js && node test/lan-server.js && node test/lan-game.js && node test/browser-lan-smoke.js",
+    "coverage": "node scripts/run-coverage.js",
+    "test:compat": "node scripts/check-compatibility.js",
+    "build:exe": "node scripts/build-exe.js",
+    "build:win7": "node scripts/build-win7.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "c8": "^12.0.0",
+    "esbuild": "^0.28.2",
+    "postject": "1.0.0-alpha.6"
+  }
+}

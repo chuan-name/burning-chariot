@@ -1,0 +1,30 @@
+{
+  "all": true,
+  "include": [
+    "server/**/*.js",
+    "scripts/**/*.js",
+    "js/data.js",
+    "js/terrain.js",
+    "js/physics.js",
+    "js/render.js",
+    "js/audio.js",
+    "js/ai.js",
+    "js/game.js",
+    "js/main.js"
+  ],
+  "exclude": [
+    "scripts/run-coverage.js"
+  ],
+  "exclude-after-remap": true,
+  "reporter": [
+    "text",
+    "text-summary",
+    "json-summary"
+  ],
+  "reports-dir": "coverage",
+  "check-coverage": true,
+  "lines": 50,
+  "branches": 50,
+  "functions": 0,
+  "statements": 0
+}

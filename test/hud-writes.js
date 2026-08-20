@@ -97,7 +97,9 @@ function build() {
   vm.createContext(sandbox);
 
   for (const f of ['data.js', 'terrain.js', 'physics.js', 'render.js', 'audio.js', 'ai.js', 'game.js', 'main.js']) {
-    vm.runInContext(fs.readFileSync(path.join(ROOT, 'js', f), 'utf8'), sandbox, { filename: f });
+    const file = path.join(ROOT, 'js', f);
+    // 与 harness 保持一致，避免覆盖率工具把 VM 脚本当成匿名动态代码。
+    vm.runInContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
   }
   sandbox.RZ.SFX.setMuted(true);
   (listeners.DOMContentLoaded || []).forEach((fn) => fn());

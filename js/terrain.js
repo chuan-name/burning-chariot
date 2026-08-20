@@ -247,6 +247,41 @@
     this.dirty = null;
   };
 
+  /**
+   * 联机快照只传 1bit 掩码的游程编码，不传 Canvas / ImageData。
+   * 格式：[首位值, 连续长度, 连续长度, ...]，通常只有几千个数字。
+   */
+  Terrain.prototype.exportMaskRLE = function () {
+    var m = this.mask;
+    if (!m.length) return [0];
+    var out = [m[0]], value = m[0], run = 1;
+    for (var i = 1; i < m.length; i++) {
+      if (m[i] === value) run++;
+      else { out.push(run); value = m[i]; run = 1; }
+    }
+    out.push(run);
+    return out;
+  };
+
+  Terrain.prototype.importMaskRLE = function (rle) {
+    if (!rle || rle.length < 2 || (rle[0] !== 0 && rle[0] !== 1)) return false;
+    var total = 0, i;
+    for (i = 1; i < rle.length; i++) {
+      if (!Number.isFinite(rle[i]) || rle[i] <= 0 || rle[i] !== Math.floor(rle[i])) return false;
+      total += rle[i];
+    }
+    if (total !== this.mask.length) return false;
+    var at = 0, value = rle[0];
+    for (i = 1; i < rle.length; i++) {
+      this.mask.fill(value, at, at + rle[i]);
+      at += rle[i]; value = value ? 0 : 1;
+    }
+    paint(this.mask, this.img, this.map);
+    this.ctx.putImageData(this.img, 0, 0);
+    this.dirty = null;
+    return true;
+  };
+
   /** 为 n 个战车挑选互相分开、且脚下有地的出生点 */
   Terrain.prototype.spawnPoints = function (n) {
     var margin = 110, span = WORLD_W - margin * 2;

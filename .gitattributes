@@ -1,0 +1,15 @@
+# Keep source files stable across Windows, macOS and Linux checkouts.
+* text=auto eol=lf
+
+# Windows command scripts require native CRLF line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never attempt line-ending conversion for generated binary formats.
+*.exe binary
+*.dll binary
+*.pdb binary
+*.node binary
+*.blob binary
+*.zip binary
+*.7z binary

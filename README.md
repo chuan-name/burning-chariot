@@ -3,7 +3,7 @@
 新浪游戏大厅曾经代理运营的回合制战车对战游戏《燃烧战车》的浏览器复刻版。
 调整**角度**与**力度**、算准**风力**，用会被炸烂的地形把对面从地图上抹掉。
 
-纯前端、零依赖、零构建：直接双击 `index.html` 就能玩。
+单机部分仍是纯前端、零依赖、零构建：直接双击 `index.html` 就能玩。
 
 ```
 open index.html          # macOS
@@ -90,11 +90,57 @@ open index.html          # macOS
 
 ## 模式
 
-单挑 1v1、组队 2v2（你 + 电脑队友 对 两台电脑）、同屏双人（两人共用一套键盘轮流出手）。
+单挑 1v1、组队 2v2（你 + 电脑队友 对 两台电脑）、同屏双人（两人共用一套键盘轮流出手），
+以及局域网 1v1。
 电脑分新兵 / 老手 / 王牌三档——难度只影响瞄准抖动和是否总选最优解，AI 不会作弊，
 你隐身它就真的看不见。
 
-> 原作是网络对战游戏，本复刻版没有服务器，只做单机与同屏双人。
+## 局域网 1v1
+
+Windows 开发版双击 `start-lan.bat`。脚本会安装一次轻量依赖、启动 HTTP/WebSocket 服务、
+监听 `0.0.0.0:3000`、显示可用局域网 IPv4，并自动打开 `http://localhost:3000`。
+
+免安装发行版位于 `release/Burning-Chariot/`：双击 `BurningChariot.exe` 即可。它已经内嵌
+Windows x64 Node.js 运行时和 WebSocket 服务，旁边的 `game/` 是静态资源目录；分发时请把
+整个 `Burning-Chariot` 文件夹一起复制，不要只复制 exe。
+
+Windows 7 SP1 64 位兼容版位于 `release/Burning-Chariot-Win7-x64/`，双击
+`BurningChariot-Win7.exe`。其服务器携带官方 Node 12.22.12 x64 兼容运行时，发布目录内的浏览器脚本
+固定以 Google Chrome `102.0.5005.63`（`chrome102`）为构建目标。仍须连同旁边的 `game/`
+`runtime/`、`server/` 目录整体分发。Windows 7 与 Node 12 均已停止官方安全维护，因此该版本只应在可信局域网内使用，
+不要将 3000 端口映射或暴露到互联网。
+
+房主在主菜单选择「局域网对战」并创建房间。另一台电脑连接同一 Wi-Fi/有线局域网，
+在浏览器打开房主窗口中显示的 `http://192.168.x.x:3000`，然后输入 6 位房间号。
+
+首次运行时 Windows Defender Firewall 可能询问是否允许访问：请选择允许「专用网络」。
+不要为此关闭防火墙。若其他电脑打不开页面，请确认双方处于同一局域网且专用网络已放行。
+
+单机不需要运行服务器；双击 `index.html` 时不会主动建立 WebSocket 连接。
+
+### 开发与打包
+
+```sh
+npm install
+npm test
+npm run test:compat
+npm run build:exe
+npm run build:win7
+```
+
+EXE 使用当前 Node.js 官方 SEA（Single Executable Application）流程构建，服务端与 `ws`
+先打成一个 CommonJS 入口，再注入 Windows x64 Node 运行时；网页静态资源保留为外置 `game/`
+目录，以便稳定分发和检查。未签名的本地构建可能触发 Windows SmartScreen；正式发布可再用
+代码签名证书签名，但这不影响局域网功能。
+
+`build:win7` 下载并校验 Node.js 官方 `12.22.12` Windows x64 运行时；本地默认用 Windows
+自带的 .NET 3.5 编译器生成轻量启动器，CI 则在该编译器缺失时使用同样兼容 Win7 的原生启动器。
+浏览器脚本统一由 esbuild 转换到 `chrome102` 目标。现代版与 Win7 版使用不同发行目录，互不覆盖。
+
+正式版本通过 GitHub Releases 发布：Windows 10/11 x64 下载
+`Burning-Chariot-Windows-x64.zip`，Windows 7 SP1 x64 + Chrome 102 下载
+`Burning-Chariot-Win7-x64-Chrome102.zip`。两个压缩包都必须完整解压后运行；发布流程详见
+[`CI/CD 与发布说明`](.github/CI-CD.md)。
 
 ---
 
