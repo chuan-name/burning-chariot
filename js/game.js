@@ -624,10 +624,10 @@
   };
 
   // ---- 移动 / 瞄准 ----
-  Game.prototype.moveActive = function (dir) {
+  Game.prototype.moveActive = function (dir, silent) {
     var u = this.active;
     if (!u || this.phase !== 'aim' || u.airborne || u.fuel <= 0) return;
-    if (u.stunned > 0) { if ((this.t & 31) === 0) this.say('被麻痹了，动不了'); return; }
+    if (u.stunned > 0) { if (!silent && (this.t & 31) === 0) this.say('被麻痹了，动不了'); return; }
     u.face = dir;
     var cost = u.vehicle.moveCost;
     // 还打得出一号武器就给它留着，已经打不出了就随便走——总不能把人钉在原地
@@ -652,7 +652,7 @@
       this.spend(u, step, 'move');
       stepsLeft--;
     }
-    if ((this.t & 7) === 0) RZ.SFX.move();
+    if (!silent && (this.t & 7) === 0) RZ.SFX.move();
     this.markNetwork('light');
   };
 
@@ -1112,7 +1112,7 @@
       return {
         index: u.index, playerId: u.playerId, vehicleId: u.vehicle.id, name: u.name, team: u.team,
         hp: u.hp, maxHp: u.maxHp, fuel: own ? u.fuel : null, maxFuel: u.maxFuel,
-        spentThisTurn: own ? u.spentThisTurn : 0, dealtThisTurn: own ? u.dealtThisTurn : 0,
+        spentThisTurn: own ? u.spentThisTurn : 0, moveSpent: own ? u.moveSpent : 0, dealtThisTurn: own ? u.dealtThisTurn : 0,
         x: hidden ? u.lastSeenX : u.x, y: hidden ? u.lastSeenY : u.y, vy: hidden ? 0 : u.vy,
         face: u.face, aim: own ? u.aim : Math.round(u.aim / 5) * 5,
         power: own ? u.power : 0, lastPower: own ? u.lastPower : 0,
@@ -1153,7 +1153,7 @@
     if (!state || state.mapId !== this.map.id || !state.units || state.units.length !== this.units.length) return false;
     if (state.version != null && this.networkVersion > state.version) return false;
     this.networkVersion = state.version || this.networkVersion;
-    var fields = ['hp','maxHp','maxFuel','spentThisTurn','dealtThisTurn','x','y','vy','face','aim','power','lastPower','weaponIdx',
+    var fields = ['hp','maxHp','maxFuel','spentThisTurn','moveSpent','dealtThisTurn','x','y','vy','face','aim','power','lastPower','weaponIdx',
       'buffDouble','buffPower','shotMode','stunned','stealth','noFire','alive','airborne','fallFrom','hitFlash','muzzleFlash','usedItemFlash'];
     for (var i = 0; i < state.units.length; i++) {
       var src = state.units[i], u = this.units[i];

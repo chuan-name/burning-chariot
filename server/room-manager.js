@@ -145,6 +145,8 @@ class RoomManager {
       return this.error(socket, 'NOT_YOUR_TURN', '当前不是你的回合');
     }
     const safe = { type: 'ACTION', action, playerId: membership.playerId };
+    const inputSeq = Number(message.inputSeq);
+    if (Number.isInteger(inputSeq) && inputSeq > 0 && inputSeq <= 0x7fffffff) safe.inputSeq = inputSeq;
     if (action === 'MOVE') safe.direction = message.direction === 'left' ? 'left' : message.direction === 'right' ? 'right' : '';
     if (action === 'SET_ANGLE') safe.value = Number(message.value);
     if (action === 'SELECT_WEAPON') safe.weapon = Number(message.weapon);
