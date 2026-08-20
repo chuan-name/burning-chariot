@@ -116,7 +116,7 @@ function closeWs(ws) {
     send(host, { type: 'HOST_STATE', currentPlayerId: 2, started: true });
     await new Promise(resolve => setTimeout(resolve, 20));
     const actions = [
-      { action: 'MOVE', direction: 'right' },
+      { action: 'MOVE', direction: 'right', inputSeq: 17 },
       { action: 'SET_ANGLE', value: 54 },
       { action: 'SELECT_WEAPON', weapon: 1 },
       { action: 'FIRE', angle: 54, power: 72, weapon: 1 },
@@ -128,6 +128,7 @@ function closeWs(ws) {
       send(guest, Object.assign({ type: 'ACTION' }, action));
       const relayed = await relayP;
       assert.equal(relayed.action, action.action); assert.equal(relayed.playerId, 2);
+      if (action.inputSeq) assert.equal(relayed.inputSeq, action.inputSeq);
       ok(action.action + ' 语义 Action 正确转发');
     }
 

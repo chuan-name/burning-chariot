@@ -189,13 +189,22 @@ async function openChrome(gamePort, debugPort, suffix) {
     await sleep(800);
     const before = await evaluate(client, "({player:window.__game.active.playerId,x:window.__game.active.x,fuel:window.__game.active.fuel})");
     if (before.player !== 2) throw new Error('未轮到 P2: ' + JSON.stringify(before));
+    const guestBefore = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel})");
+    await evaluate(guest, "(function(){var p=RZ.LanClient.prototype,o=p.sendAction;window.__lanOriginalSendAction=o;p.sendAction=function(a){var self=this;setTimeout(function(){o.call(self,a);},220);return true;};})()");
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'}))");
-    await sleep(220);
+    await sleep(80);
+    const predicted = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel})");
+    if (predicted.x <= guestBefore.x || predicted.fuel >= guestBefore.fuel) throw new Error('P2 高延迟下未立即本地预测移动: ' + JSON.stringify({ guestBefore, predicted }));
+    console.log('  ok   P2 高延迟下立即本地预测移动');
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowRight'}))");
+    await evaluate(guest, "RZ.LanClient.prototype.sendAction=window.__lanOriginalSendAction");
     await sleep(500);
     const after = await evaluate(client, "({player:window.__game.active.playerId,x:window.__game.active.x,fuel:window.__game.active.fuel})");
     if (after.player !== 2 || (after.x === before.x && after.fuel === before.fuel)) throw new Error('P2 MOVE 未到达权威端: ' + JSON.stringify({ before, after }));
     console.log('  ok   P2 MOVE 经网络在 P1 权威 Game 中执行');
+    const reconciled = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel})");
+    if (Math.abs(reconciled.x - after.x) > 4 || Math.abs(reconciled.fuel - after.fuel) > 1) throw new Error('P2 移动预测未与权威状态收敛: ' + JSON.stringify({ after, reconciled }));
+    console.log('  ok   P2 移动预测与权威状态完成校正');
 
     // 蓄力期间权威快照仍会持续抵达；本地力度必须平滑增长，松手后以真实力度在 P1 开火。
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keydown',{key:' '}))");
@@ -214,5 +223,5 @@ async function openChrome(gamePort, debugPort, suffix) {
     if (two) two.proc.kill();
     await new Promise(resolve => app.server.close(resolve));
   }
-  console.log('\n✅ Browser LAN Smoke 通过 7 项');
+  console.log('\n✅ Browser LAN Smoke 通过 9 项');
 })().catch(err => { console.error('\n❌ Browser LAN Smoke 失败\n' + err.stack); process.exitCode = 1; });
