@@ -6,6 +6,7 @@ const fs = require('fs');
 const http = require('http');
 const WebSocket = require('ws');
 const { createLanServer } = require('../server/server');
+const { RoomManager } = require('../server/room-manager');
 
 let passed = 0;
 function ok(label) { passed++; console.log('  ok   ' + label); }
@@ -167,6 +168,18 @@ function closeWs(ws) {
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.equal(app.rooms.rooms.has(created.roomId), false);
     ok('房主离开后销毁房间');
+
+    const bufferedRooms = new RoomManager();
+    const fakeHost = { readyState: 1, bufferedAmount: 0, messages: [], send(raw) { this.messages.push(JSON.parse(raw)); } };
+    const fakeGuest = { readyState: 1, bufferedAmount: 0, messages: [], send(raw) { this.messages.push(JSON.parse(raw)); } };
+    const bufferedRoom = bufferedRooms.create(fakeHost);
+    bufferedRooms.join(fakeGuest, bufferedRoom.id);
+    fakeGuest.messages.length = 0; fakeGuest.bufferedAmount = 65 * 1024;
+    bufferedRooms.handle(fakeHost, { type: 'GAME_EVENT', event: 'STATE_DELTA', state: { version: 1 } });
+    assert.equal(fakeGuest.messages.length, 0);
+    bufferedRooms.handle(fakeHost, { type: 'STATE_SNAPSHOT', state: { version: 2 } });
+    assert.equal(fakeGuest.messages.length, 1); assert.equal(fakeGuest.messages[0].type, 'STATE_SNAPSHOT');
+    ok('慢客户端只丢弃可替代状态，完整快照仍会送达');
 
     const bat = fs.readFileSync(require('path').join(__dirname, '..', 'start-lan.bat'), 'utf8');
     assert.match(bat, /cd \/d "%~dp0"/i); assert.match(bat, /server\\server\.js/i);

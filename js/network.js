@@ -2,6 +2,8 @@
 (function (RZ) {
   'use strict';
 
+  var MAX_VOLATILE_BUFFER = 64 * 1024;
+
   function wsUrl() {
     if (location.protocol === 'file:') return '';
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -81,6 +83,13 @@
   LanClient.prototype.send = function (message) {
     if (!this.socket || this.socket.readyState !== 1) return false;
     this.socket.send(JSON.stringify(message)); return true;
+  };
+  LanClient.prototype.canSendVolatile = function () {
+    return !!this.socket && this.socket.readyState === 1 && this.socket.bufferedAmount <= MAX_VOLATILE_BUFFER;
+  };
+  LanClient.prototype.sendVolatile = function (message) {
+    if (!this.canSendVolatile()) return false;
+    return this.send(message);
   };
   LanClient.prototype.createRoom = function () { return this.send({ type: 'CREATE_ROOM' }); };
   LanClient.prototype.joinRoom = function (roomId) { return this.send({ type: 'JOIN_ROOM', roomId: roomId }); };

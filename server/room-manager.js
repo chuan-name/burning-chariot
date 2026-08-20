@@ -4,6 +4,7 @@ const crypto = require('crypto');
 
 const ROOM_TTL = 30 * 60 * 1000;
 const RECONNECT_GRACE = 20 * 1000;
+const MAX_VOLATILE_BUFFER = 64 * 1024;
 const ACTIONS = new Set([
   'MOVE', 'SET_ANGLE', 'SELECT_WEAPON', 'FIRE', 'USE_ITEM', 'END_TURN', 'READY', 'SELECT_VEHICLE'
 ]);
@@ -24,8 +25,9 @@ function cleanRoomId(value) {
   return /^\d{6}$/.test(id) ? id : '';
 }
 
-function send(socket, message) {
+function send(socket, message, volatile) {
   if (!socket || socket.readyState !== 1) return false;
+  if (volatile && socket.bufferedAmount > MAX_VOLATILE_BUFFER) return false;
   socket.send(JSON.stringify(message));
   return true;
 }
@@ -226,8 +228,9 @@ class RoomManager {
 
   broadcast(room, message, exceptPlayerId) {
     let sent = 0;
+    const volatile = message && message.type === 'GAME_EVENT' && message.event === 'STATE_DELTA';
     for (const player of room.players.values()) {
-      if (player.id !== exceptPlayerId && player.connected && send(player.socket, message)) sent++;
+      if (player.id !== exceptPlayerId && player.connected && send(player.socket, message, volatile)) sent++;
     }
     return sent;
   }

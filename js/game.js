@@ -490,7 +490,8 @@
     var damage = w.damage * (dmgMul || 1);
     var dig = radius * (w.digMul || 1);
     this.terrain.carve(x, y, dig);
-    this.markNetwork('full');
+    // 镜像端会立即应用 EXPLOSION；回合结束时的完整快照再做地形校正。
+    this.markNetwork('light');
     this.emitNetwork('EXPLOSION', { x: Math.round(x), y: Math.round(y), radius: radius, digRadius: dig });
     var s = w.shell;
     this.fx.burst(x, y, radius, [s.color, s.glow, '#ffffff', s.trail]);
@@ -784,7 +785,8 @@
       dig: (function (g) {
         return function (x0, y0, x1, y1, r) {
           g.terrain.tunnel(x0, y0, x1, y1, r);
-          g.markNetwork('full');
+          // 镜像端会应用同一条隧道事件，避免飞行中反复导入整张地形。
+          g.markNetwork('light');
           g.emitNetwork('TERRAIN_TUNNEL', { x0: x0, y0: y0, x1: x1, y1: y1, radius: r });
         };
       })(this)
