@@ -36,7 +36,7 @@
     var client = new RZ.LanClient();
     lan = {
       client: client, playerId: 0, roomId: '', inBattle: false, pausedByNetwork: false,
-      lastHostPlayerId: null,
+      lastHostPlayerId: null, inputSeq: 0, inputAck: 0, lastProcessedInputSeq: 0, pendingInputs: [], projectileTime: 0,
       players: {
         1: { connected: false, ready: false, vehicleId: setup.picks[0] },
         2: { connected: false, ready: false, vehicleId: setup.picks[1] }
@@ -104,6 +104,7 @@
       setLanConnection(message.state);
       if (message.state === 'disconnected' && lan.inBattle) {
         lan.pausedByNetwork = true;
+        lan.pendingInputs.length = 0;
         showNetworkPause('与服务器连接断开');
       }
       return;
@@ -177,6 +178,7 @@
   function resetLanRoom(message) {
     if (!lan) return;
     lan.roomId = ''; lan.playerId = 0; lan.inBattle = false; lan.lastHostPlayerId = null;
+    lan.inputSeq = lan.inputAck = lan.lastProcessedInputSeq = 0; lan.pendingInputs.length = 0; lan.projectileTime = 0;
     lan.players[1].connected = lan.players[2].connected = false;
     lan.players[1].ready = lan.players[2].ready = false;
     $('lan-entry').hidden = false; $('lan-room').hidden = true;
@@ -460,6 +462,7 @@
     if (!lan || lan.inBattle) return;
     lan.inBattle = true; lan.pausedByNetwork = false; lan.pendingConfig = config;
     lan.lastSendAt = 0; lan.lastHostPlayerId = null; lan.remoteCharging = false; lan.inputAt = 0;
+    lan.inputSeq = lan.inputAck = lan.lastProcessedInputSeq = 0; lan.pendingInputs.length = 0; lan.projectileTime = 0;
     if (lan.playerId !== 1) {
       lanText('lan-room-status', '正在接收房主的战场状态...');
       return;
@@ -501,6 +504,7 @@
     // STATE_DELTA 可由下一份状态完全替代；积压时跳过旧帧，避免 TCP 队列把客户端越拖越慢。
     if (!full && !lan.client.canSendVolatile()) { lan.lastSendAt = now; return false; }
     var state = game.visibleStateForPlayer(2, !!full);
+    state.inputAck = lan.lastProcessedInputSeq || 0;
     if (lan.lastHostPlayerId !== state.currentPlayerId) {
       if (!lan.client.send({ type: 'HOST_STATE', currentPlayerId: state.currentPlayerId, started: true })) return false;
       lan.lastHostPlayerId = state.currentPlayerId;
@@ -518,9 +522,13 @@
     if (!lan || !lan.inBattle) return;
     if (message.type === 'ACTION' && lan.playerId === 1 && game) {
       var accepted = game.applyNetworkAction(message.playerId, message);
-      if (!accepted) lan.client.send({ type: 'GAME_EVENT', event: 'ACTION_REJECTED', data: { action: message.action } });
-      // MOVE / 角度等连续输入由主循环合并成 20Hz delta，避免每个 Action 都回一份状态造成拥塞。
+      if (message.playerId === 2 && Number.isInteger(message.inputSeq)) {
+        lan.lastProcessedInputSeq = Math.max(lan.lastProcessedInputSeq || 0, message.inputSeq);
+      }
+      if (!accepted) lan.client.send({ type: 'GAME_EVENT', event: 'ACTION_REJECTED', data: { action: message.action, inputSeq: message.inputSeq } });
+      // 连续输入维持 20Hz 合并；离散操作立即确认，避免开火或选道具再等下一帧快照。
       if (game.networkDirty === 'full') sendLanSnapshot(true);
+      else if (message.action !== 'MOVE' && message.action !== 'SET_ANGLE') sendLanSnapshot(false);
       return;
     }
     if (lan.playerId !== 2) return;
@@ -534,6 +542,7 @@
         var localPower = lan.remoteCharging && game.active && game.active.playerId === lan.playerId
           ? game.active.power : null;
         game.applyVisibleState(state);
+        reconcileLanPredictedInputs(state);
         if (localPower != null && game.active && game.active.playerId === lan.playerId && game.phase === 'aim') {
           game.active.power = Math.max(localPower, game.active.power);
           if (lan.inputAngle != null) game.active.aim = lan.inputAngle;
@@ -961,7 +970,7 @@
 
     if (!paused && game.result === null && !(lan && lan.inBattle && lan.pausedByNetwork)) {
       if (lan && lan.inBattle && lan.playerId === 2) {
-        updateLanGuestInput(ts);
+        updateLanGuestInput(ts, dt);
       } else {
         if (canControl()) game.applyHeld(keys);
         game.update(dt);
@@ -985,9 +994,10 @@
     }
   }
 
-  function updateLanGuestInput(ts) {
-    // 镜像端只推进纯视觉动画；物理、回合和伤害始终等权威快照。
+  function updateLanGuestInput(ts, dt) {
+    // 镜像端本地推进弹道画面；碰撞结果、伤害、地形和回合仍以房主为准。
     game.t += 16; game.fx.update(); game.bg.update(game.t);
+    advanceLanGuestProjectiles(dt);
     if (!canControl()) { if (lan.remoteCharging) { lan.remoteCharging = false; RZ.SFX.stopCharge(); } return; }
     if (lan.remoteCharging) {
       game.active.power = Math.min(100, game.active.power + 0.8);
@@ -996,15 +1006,66 @@
     // 与房主本地 applyHeld 一样按帧响应；房主会把结果合并为 20Hz 状态下发。
     if (ts - (lan.inputAt || 0) < 16) return;
     var sent = false;
-    if (keys.ArrowLeft) { lan.client.sendAction({ action: 'MOVE', direction: 'left' }); sent = true; }
-    if (keys.ArrowRight) { lan.client.sendAction({ action: 'MOVE', direction: 'right' }); sent = true; }
+    if (keys.ArrowLeft && sendLanPredictedInput({ action: 'MOVE', direction: 'left' })) { game.moveActive(-1); sent = true; }
+    if (keys.ArrowRight && sendLanPredictedInput({ action: 'MOVE', direction: 'right' })) { game.moveActive(1); sent = true; }
     if (keys.ArrowUp || keys.ArrowDown) {
       var d = keys.ArrowUp ? 1 : -1;
-      lan.inputAngle = Math.max(-25, Math.min(90, (lan.inputAngle == null ? game.active.aim : lan.inputAngle) + d));
-      game.active.aim = lan.inputAngle;
-      lan.client.sendAction({ action: 'SET_ANGLE', value: lan.inputAngle }); sent = true;
+      var nextAngle = Math.max(-25, Math.min(90, (lan.inputAngle == null ? game.active.aim : lan.inputAngle) + d));
+      if (sendLanPredictedInput({ action: 'SET_ANGLE', value: nextAngle })) {
+        lan.inputAngle = nextAngle; game.active.aim = nextAngle; sent = true;
+      }
     }
     if (sent) lan.inputAt = ts;
+  }
+
+  function sendLanPredictedInput(action) {
+    action.inputSeq = ++lan.inputSeq;
+    if (!lan.client.sendAction(action)) return false;
+    lan.pendingInputs.push(action);
+    return true;
+  }
+
+  function reconcileLanPredictedInputs(state) {
+    var ack = Number(state.inputAck) || 0;
+    lan.inputAck = Math.max(lan.inputAck || 0, ack);
+    lan.pendingInputs = lan.pendingInputs.filter(function (input) { return input.inputSeq > lan.inputAck; });
+    if (!game.active || game.active.playerId !== lan.playerId || game.phase !== 'aim') {
+      lan.pendingInputs.length = 0;
+      return;
+    }
+    for (var i = 0; i < lan.pendingInputs.length; i++) {
+      var input = lan.pendingInputs[i];
+      if (input.action === 'MOVE') game.moveActive(input.direction === 'left' ? -1 : 1, true);
+      else if (input.action === 'SET_ANGLE') game.active.aim = input.value;
+    }
+  }
+
+  function updateLanGuestProjectiles() {
+    if (!game.projectiles.length) return;
+    var spawned = [];
+    var env = {
+      terrain: game.terrain, gravity: game.map.gravity, wind: game.wind,
+      units: game.units, recordTrail: true, spawn: spawned
+    };
+    for (var i = game.projectiles.length - 1; i >= 0; i--) {
+      var p = game.projectiles[i], event = RZ.step(p, env);
+      if ((p.age & 3) === 0) game.fx.trailPuff(p.x, p.y, p.w.shell.trail);
+      if (!event) continue;
+      if (event.type === 'bounce') { RZ.SFX.bounce(); continue; }
+      if (event.type === 'split') game.fx.burst(event.x, event.y, 16, [p.w.shell.color, '#ffffff']);
+      game.projectiles.splice(i, 1);
+    }
+    while (spawned.length) game.projectiles.push(spawned.pop());
+    game.updateCamera();
+  }
+
+  function advanceLanGuestProjectiles(dt) {
+    if (!game.projectiles.length) { lan.projectileTime = 0; return; }
+    lan.projectileTime = (lan.projectileTime || 0) + Math.min(50, dt || 16);
+    while (lan.projectileTime >= 16 && game.projectiles.length) {
+      updateLanGuestProjectiles();
+      lan.projectileTime -= 16;
+    }
   }
 
   function resize() {
