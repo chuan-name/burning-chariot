@@ -4,7 +4,9 @@ const crypto = require('crypto');
 
 const ROOM_TTL = 30 * 60 * 1000;
 const RECONNECT_GRACE = 20 * 1000;
-const MAX_VOLATILE_BUFFER = 64 * 1024;
+// STATE_DELTA 可以被更新状态替代。积压超过一两帧就丢弃旧状态，避免 TCP
+// 队列把“过去的画面”持续送给客户端，进而阻塞操作确认。
+const MAX_VOLATILE_BUFFER = 16 * 1024;
 const ACTIONS = new Set([
   'MOVE', 'SET_ANGLE', 'SELECT_WEAPON', 'FIRE', 'USE_ITEM', 'END_TURN', 'READY', 'SELECT_VEHICLE'
 ]);
@@ -147,7 +149,10 @@ class RoomManager {
     const safe = { type: 'ACTION', action, playerId: membership.playerId };
     const inputSeq = Number(message.inputSeq);
     if (Number.isInteger(inputSeq) && inputSeq > 0 && inputSeq <= 0x7fffffff) safe.inputSeq = inputSeq;
-    if (action === 'MOVE') safe.direction = message.direction === 'left' ? 'left' : message.direction === 'right' ? 'right' : '';
+    if (action === 'MOVE') {
+      safe.direction = message.direction === 'left' ? 'left' : message.direction === 'right' ? 'right' : '';
+      safe.steps = message.steps == null ? 1 : Number(message.steps);
+    }
     if (action === 'SET_ANGLE') safe.value = Number(message.value);
     if (action === 'SELECT_WEAPON') safe.weapon = Number(message.weapon);
     if (action === 'FIRE') {
@@ -163,7 +168,8 @@ class RoomManager {
   }
 
   _validAction(message) {
-    if (message.action === 'MOVE') return message.direction === 'left' || message.direction === 'right';
+    if (message.action === 'MOVE') return (message.direction === 'left' || message.direction === 'right') &&
+      Number.isInteger(message.steps) && message.steps >= 1 && message.steps <= 4;
     if (message.action === 'SET_ANGLE') return Number.isFinite(message.value) && message.value >= -25 && message.value <= 90;
     if (message.action === 'SELECT_WEAPON') return Number.isInteger(message.weapon) && message.weapon >= 0 && message.weapon <= 2;
     if (message.action === 'FIRE') return Number.isFinite(message.angle) && message.angle >= -25 && message.angle <= 90 &&

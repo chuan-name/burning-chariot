@@ -190,15 +190,15 @@ async function openChrome(gamePort, debugPort, suffix) {
     const before = await evaluate(client, "({player:window.__game.active.playerId,x:window.__game.active.x,fuel:window.__game.active.fuel})");
     if (before.player !== 2) throw new Error('未轮到 P2: ' + JSON.stringify(before));
     const guestBefore = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel})");
-    await evaluate(guest, "(function(){var p=RZ.LanClient.prototype,o=p.sendAction;window.__lanOriginalSendAction=o;p.sendAction=function(a){var self=this;setTimeout(function(){o.call(self,a);},220);return true;};})()");
+    await evaluate(guest, "(function(){var p=RZ.LanClient.prototype,o=p.sendAction;window.__lanOriginalSendAction=o;window.__lanDelayedActions=[];p.sendAction=function(a){var self=this;window.__lanDelayedActions.push(Object.assign({},a));setTimeout(function(){o.call(self,a);},600);return true;};})()");
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'}))");
     await sleep(80);
-    const predicted = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel})");
-    if (predicted.x <= guestBefore.x || predicted.fuel >= guestBefore.fuel) throw new Error('P2 高延迟下未立即本地预测移动: ' + JSON.stringify({ guestBefore, predicted }));
+    const predicted = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel,moves:window.__lanDelayedActions.filter(function(a){return a.action==='MOVE';})})");
+    if (predicted.x <= guestBefore.x || predicted.fuel >= guestBefore.fuel || predicted.moves.length > 3 || predicted.moves.some(function(a){return a.steps<1||a.steps>4;})) throw new Error('P2 高延迟下未立即本地预测/批量移动: ' + JSON.stringify({ guestBefore, predicted }));
     console.log('  ok   P2 高延迟下立即本地预测移动');
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowRight'}))");
     await evaluate(guest, "RZ.LanClient.prototype.sendAction=window.__lanOriginalSendAction");
-    await sleep(500);
+    await sleep(850);
     const after = await evaluate(client, "({player:window.__game.active.playerId,x:window.__game.active.x,fuel:window.__game.active.fuel})");
     if (after.player !== 2 || (after.x === before.x && after.fuel === before.fuel)) throw new Error('P2 MOVE 未到达权威端: ' + JSON.stringify({ before, after }));
     console.log('  ok   P2 MOVE 经网络在 P1 权威 Game 中执行');
@@ -206,13 +206,32 @@ async function openChrome(gamePort, debugPort, suffix) {
     if (Math.abs(reconciled.x - after.x) > 4 || Math.abs(reconciled.fuel - after.fuel) > 1) throw new Error('P2 移动预测未与权威状态收敛: ' + JSON.stringify({ after, reconciled }));
     console.log('  ok   P2 移动预测与权威状态完成校正');
 
+    await evaluate(guest, "(function(){var p=RZ.LanClient.prototype,o=p.sendAction;window.__lanOriginalSendAction=o;window.__lanDelayedActions=[];p.sendAction=function(a){var self=this;window.__lanDelayedActions.push(Object.assign({},a));setTimeout(function(){o.call(self,a);},600);return true;};})()");
+    const angleBefore = await evaluate(guest, "window.__game.active.aim");
+    await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp'}))");
+    await sleep(80);
+    const anglePredicted = await evaluate(guest, "({aim:window.__game.active.aim,angles:window.__lanDelayedActions.filter(function(a){return a.action==='SET_ANGLE';})})");
+    if (anglePredicted.aim <= angleBefore || anglePredicted.angles.length > 3) throw new Error('P2 高延迟下角度未立即响应/未合并: ' + JSON.stringify({ angleBefore, anglePredicted }));
+    console.log('  ok   P2 高延迟下角度立即响应并合并上报');
+    await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowUp'}));RZ.LanClient.prototype.sendAction=window.__lanOriginalSendAction");
+    await sleep(850);
+    const authoritativeAngle = await evaluate(client, "window.__game.active.aim");
+    if (Math.abs(authoritativeAngle - anglePredicted.aim) > 1) throw new Error('P2 角度未在权威端收敛: ' + JSON.stringify({ authoritativeAngle, anglePredicted }));
+    console.log('  ok   P2 角度预测与权威状态完成校正');
+
     // 蓄力期间权威快照仍会持续抵达；本地力度必须平滑增长，松手后以真实力度在 P1 开火。
+    await evaluate(guest, "(function(){var p=RZ.LanClient.prototype,o=p.sendAction;window.__lanOriginalSendAction=o;p.sendAction=function(a){var self=this;setTimeout(function(){o.call(self,a);},600);return true;};})()");
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keydown',{key:' '}))");
     await sleep(850);
     const charging = await evaluate(guest, "({power:window.__game.active.power,phase:window.__game.phase,player:window.__game.active.playerId})");
     if (charging.player !== 2 || charging.phase !== 'aim' || charging.power < 25) throw new Error('P2 蓄力被快照清零: ' + JSON.stringify(charging));
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keyup',{key:' '}))");
-    await sleep(350);
+    await sleep(80);
+    const localFired = await evaluate(guest, "({phase:window.__game.phase,projectiles:window.__game.projectiles.length})");
+    if (localFired.phase !== 'fly' || localFired.projectiles < 1) throw new Error('P2 高延迟下未立即显示本地预测弹道: ' + JSON.stringify(localFired));
+    console.log('  ok   P2 松开空格后立即显示本地预测弹道');
+    await evaluate(guest, "RZ.LanClient.prototype.sendAction=window.__lanOriginalSendAction");
+    await sleep(850);
     const fired = await evaluate(client, "({power:window.__game.units[1].lastPower,phase:window.__game.phase,fuel:window.__game.units[1].fuel})");
     if (fired.power < 25 || fired.fuel >= before.fuel) throw new Error('P2 FIRE 未以蓄力值执行: ' + JSON.stringify(fired));
     console.log('  ok   P2 蓄力不再被快照清零并能正常开火');
@@ -223,5 +242,5 @@ async function openChrome(gamePort, debugPort, suffix) {
     if (two) two.proc.kill();
     await new Promise(resolve => app.server.close(resolve));
   }
-  console.log('\n✅ Browser LAN Smoke 通过 9 项');
+  console.log('\n✅ Browser LAN Smoke 通过 12 项');
 })().catch(err => { console.error('\n❌ Browser LAN Smoke 失败\n' + err.stack); process.exitCode = 1; });

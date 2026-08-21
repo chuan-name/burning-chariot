@@ -39,7 +39,7 @@ console.log('\nLAN Game Sync');
   g.active = p2; g.phase = 'aim'; p2.x = 900; p2.fuel = 100;
   check(!g.applyNetworkAction(1, { action: 'MOVE', direction: 'left' }), '非自己回合操作被拒绝');
   const x0 = p2.x, f0 = p2.fuel;
-  check(g.applyNetworkAction(2, { action: 'MOVE', direction: 'left' }) && p2.x < x0 && p2.fuel < f0, 'MOVE 经权威 Game 执行并同步 Fuel');
+  check(g.applyNetworkAction(2, { action: 'MOVE', direction: 'left', steps: 3 }) && p2.x < x0 - 2 && p2.fuel < f0, '批量 MOVE 经权威 Game 执行并同步 Fuel');
   check(g.visibleStateForPlayer(2, false).units[1].moveSpent === p2.moveSpent, '移动预测校正包含权威 moveSpent');
   check(g.applyNetworkAction(2, { action: 'SET_ANGLE', value: 63 }) && p2.aim === 63, 'SET_ANGLE 经权威 Game 执行');
   p2.fuel = 200;

@@ -626,8 +626,9 @@
   // ---- 移动 / 瞄准 ----
   Game.prototype.moveActive = function (dir, silent) {
     var u = this.active;
-    if (!u || this.phase !== 'aim' || u.airborne || u.fuel <= 0) return;
-    if (u.stunned > 0) { if (!silent && (this.t & 31) === 0) this.say('被麻痹了，动不了'); return; }
+    if (!u || this.phase !== 'aim' || u.airborne || u.fuel <= 0 || (dir !== -1 && dir !== 1)) return false;
+    if (u.stunned > 0) { if (!silent && (this.t & 31) === 0) this.say('被麻痹了，动不了'); return false; }
+    var beforeX = u.x, beforeFuel = u.fuel, beforeFace = u.face;
     u.face = dir;
     var cost = u.vehicle.moveCost;
     // 还打得出一号武器就给它留着，已经打不出了就随便走——总不能把人钉在原地
@@ -654,6 +655,7 @@
     }
     if (!silent && (this.t & 7) === 0) RZ.SFX.move();
     this.markNetwork('light');
+    return u.x !== beforeX || u.fuel !== beforeFuel || u.face !== beforeFace;
   };
 
   /** 每帧处理「按住不放」的按键；keys 是 {按键名: 布尔} */
@@ -1063,9 +1065,11 @@
     if (this.result !== null || !u || !u.alive || u.playerId !== playerId || u.ai || this.phase !== 'aim') return false;
     var action = message && message.action;
     if (action === 'MOVE') {
-      var x0 = u.x, f0 = u.fuel;
-      this.moveActive(message.direction === 'left' ? -1 : message.direction === 'right' ? 1 : 0);
-      return u.x !== x0 || u.fuel !== f0;
+      var x0 = u.x, f0 = u.fuel, face0 = u.face;
+      var moveDir = message.direction === 'left' ? -1 : message.direction === 'right' ? 1 : 0;
+      var moveSteps = Number.isInteger(message.steps) ? Math.max(1, Math.min(4, message.steps)) : 1;
+      for (var moveNo = 0; moveNo < moveSteps; moveNo++) this.moveActive(moveDir);
+      return u.x !== x0 || u.fuel !== f0 || u.face !== face0;
     }
     if (action === 'SET_ANGLE') {
       var angle = Number(message.value);
