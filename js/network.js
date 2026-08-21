@@ -2,7 +2,7 @@
 (function (RZ) {
   'use strict';
 
-  var MAX_VOLATILE_BUFFER = 64 * 1024;
+  var MAX_VOLATILE_BUFFER = 16 * 1024;
 
   function wsUrl() {
     if (location.protocol === 'file:') return '';

@@ -69,6 +69,9 @@ function closeWs(ws) {
     const page = await request(port, '/');
     assert.equal(page.status, 200); assert.match(page.body, /Burning Chariot/);
     ok('HTTP 静态资源访问');
+    const mainScript = await request(port, '/js/main.js');
+    assert.equal(mainScript.headers['cache-control'], 'no-cache');
+    ok('协议脚本升级后强制重新验证缓存');
     const health = await request(port, '/health');
     assert.equal(JSON.parse(health.body).service, 'burning-chariot');
     ok('健康检查可识别 Burning Chariot Server');
@@ -116,7 +119,7 @@ function closeWs(ws) {
     send(host, { type: 'HOST_STATE', currentPlayerId: 2, started: true });
     await new Promise(resolve => setTimeout(resolve, 20));
     const actions = [
-      { action: 'MOVE', direction: 'right', inputSeq: 17 },
+      { action: 'MOVE', direction: 'right', steps: 3, inputSeq: 17 },
       { action: 'SET_ANGLE', value: 54 },
       { action: 'SELECT_WEAPON', weapon: 1 },
       { action: 'FIRE', angle: 54, power: 72, weapon: 1 },
@@ -129,6 +132,7 @@ function closeWs(ws) {
       const relayed = await relayP;
       assert.equal(relayed.action, action.action); assert.equal(relayed.playerId, 2);
       if (action.inputSeq) assert.equal(relayed.inputSeq, action.inputSeq);
+      if (action.steps) assert.equal(relayed.steps, action.steps);
       ok(action.action + ' 语义 Action 正确转发');
     }
 
@@ -175,7 +179,7 @@ function closeWs(ws) {
     const fakeGuest = { readyState: 1, bufferedAmount: 0, messages: [], send(raw) { this.messages.push(JSON.parse(raw)); } };
     const bufferedRoom = bufferedRooms.create(fakeHost);
     bufferedRooms.join(fakeGuest, bufferedRoom.id);
-    fakeGuest.messages.length = 0; fakeGuest.bufferedAmount = 65 * 1024;
+    fakeGuest.messages.length = 0; fakeGuest.bufferedAmount = 17 * 1024;
     bufferedRooms.handle(fakeHost, { type: 'GAME_EVENT', event: 'STATE_DELTA', state: { version: 1 } });
     assert.equal(fakeGuest.messages.length, 0);
     bufferedRooms.handle(fakeHost, { type: 'STATE_SNAPSHOT', state: { version: 2 } });

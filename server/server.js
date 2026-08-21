@@ -62,7 +62,9 @@ function createLanServer(options) {
       res.writeHead(200, {
         'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
         'x-content-type-options': 'nosniff',
-        'cache-control': path.basename(file) === 'index.html' ? 'no-cache' : 'public, max-age=300'
+        // HTML/JS/CSS/JSON 没有内容哈希，局域网发行版升级后必须重新验证，
+        // 否则旧客户端脚本可能与新服务端协议混用五分钟。
+        'cache-control': /\.(?:html|js|css|json)$/i.test(file) ? 'no-cache' : 'public, max-age=300'
       });
       if (req.method === 'HEAD') return res.end();
       fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);

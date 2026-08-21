@@ -36,7 +36,9 @@
     var client = new RZ.LanClient();
     lan = {
       client: client, playerId: 0, roomId: '', inBattle: false, pausedByNetwork: false,
-      lastHostPlayerId: null, inputSeq: 0, inputAck: 0, lastProcessedInputSeq: 0, pendingInputs: [], projectileTime: 0,
+      lastHostPlayerId: null, inputSeq: 0, inputAck: 0, lastProcessedInputSeq: 0,
+      pendingInputs: [], unsentMoves: [], unsentAngle: null, predictedFireSeq: 0,
+      inputAt: 0, lastInputFlushAt: 0, projectileTime: 0,
       players: {
         1: { connected: false, ready: false, vehicleId: setup.picks[0] },
         2: { connected: false, ready: false, vehicleId: setup.picks[1] }
@@ -104,7 +106,7 @@
       setLanConnection(message.state);
       if (message.state === 'disconnected' && lan.inBattle) {
         lan.pausedByNetwork = true;
-        lan.pendingInputs.length = 0;
+        lan.pendingInputs.length = 0; lan.unsentMoves.length = 0; lan.unsentAngle = null; lan.predictedFireSeq = 0;
         showNetworkPause('与服务器连接断开');
       }
       return;
@@ -178,7 +180,9 @@
   function resetLanRoom(message) {
     if (!lan) return;
     lan.roomId = ''; lan.playerId = 0; lan.inBattle = false; lan.lastHostPlayerId = null;
-    lan.inputSeq = lan.inputAck = lan.lastProcessedInputSeq = 0; lan.pendingInputs.length = 0; lan.projectileTime = 0;
+    lan.inputSeq = lan.inputAck = lan.lastProcessedInputSeq = 0;
+    lan.pendingInputs.length = 0; lan.unsentMoves.length = 0; lan.unsentAngle = null;
+    lan.predictedFireSeq = 0; lan.inputAt = lan.lastInputFlushAt = lan.projectileTime = 0;
     lan.players[1].connected = lan.players[2].connected = false;
     lan.players[1].ready = lan.players[2].ready = false;
     $('lan-entry').hidden = false; $('lan-room').hidden = true;
@@ -462,7 +466,9 @@
     if (!lan || lan.inBattle) return;
     lan.inBattle = true; lan.pausedByNetwork = false; lan.pendingConfig = config;
     lan.lastSendAt = 0; lan.lastHostPlayerId = null; lan.remoteCharging = false; lan.inputAt = 0;
-    lan.inputSeq = lan.inputAck = lan.lastProcessedInputSeq = 0; lan.pendingInputs.length = 0; lan.projectileTime = 0;
+    lan.inputSeq = lan.inputAck = lan.lastProcessedInputSeq = 0;
+    lan.pendingInputs.length = 0; lan.unsentMoves.length = 0; lan.unsentAngle = null;
+    lan.predictedFireSeq = 0; lan.inputAt = lan.lastInputFlushAt = lan.projectileTime = 0;
     if (lan.playerId !== 1) {
       lanText('lan-room-status', '正在接收房主的战场状态...');
       return;
@@ -537,12 +543,17 @@
       if (!state) return;
       if (!game) createLanMirror(state);
       else {
+        // 本地已经预测开火时，丢弃尚未确认 FIRE 的旧 aim 快照。否则炮弹会先
+        // 出现、又被旧状态抹掉，直到一次完整 RTT 后才重新出现。
+        var stateAck = Number(state.inputAck) || 0;
+        if (lan.predictedFireSeq && stateAck < lan.predictedFireSeq) return;
         // P2 蓄力是本地即时反馈，权威端在收到 FIRE 之前理应仍是 power=0。
         // 应用快照后恢复本地预测值，不能让 20Hz 快照把蓄力条反复清零。
         var localPower = lan.remoteCharging && game.active && game.active.playerId === lan.playerId
           ? game.active.power : null;
-        game.applyVisibleState(state);
-        reconcileLanPredictedInputs(state);
+        var predictedControls = captureLanPredictedControls();
+        if (!game.applyVisibleState(state)) return;
+        reconcileLanPredictedInputs(state, predictedControls);
         if (localPower != null && game.active && game.active.playerId === lan.playerId && game.phase === 'aim') {
           game.active.power = Math.max(localPower, game.active.power);
           if (lan.inputAngle != null) game.active.aim = lan.inputAngle;
@@ -632,12 +643,22 @@
   function releaseLocalCharge() {
     if (lan && lan.inBattle && lan.playerId === 2) {
       if (!lan.remoteCharging) return;
+      var firePower = Math.max(4, game.active.power);
       lan.remoteCharging = false; RZ.SFX.stopCharge();
-      lan.client.sendAction({ action: 'FIRE', angle: game.active.aim, power: Math.max(4, game.active.power), weapon: game.active.weaponIdx });
+      // 先把移动/角度批次送出，WebSocket 的有序传输保证 FIRE 在它们之后执行。
+      flushLanContinuousInput(performance.now ? performance.now() : Date.now(), true);
+      var fireAction = { action: 'FIRE', angle: game.active.aim, power: firePower, weapon: game.active.weaponIdx };
+      if (!sendLanPredictedInput(fireAction)) return;
+      // 画面立即开火；房主随后用带 inputAck 的权威状态校正命中、伤害和地形。
+      game.charging = true; game.active.power = firePower; game.fire();
+      lan.predictedFireSeq = fireAction.inputSeq;
     } else game.releaseCharge();
   }
   function selectLocalWeapon(idx) {
-    if (lan && lan.inBattle && lan.playerId === 2) lan.client.sendAction({ action: 'SELECT_WEAPON', weapon: idx });
+    if (lan && lan.inBattle && lan.playerId === 2) {
+      var weaponAction = { action: 'SELECT_WEAPON', weapon: idx };
+      if (sendLanPredictedInput(weaponAction)) game.setWeapon(idx);
+    }
     else game.setWeapon(idx);
   }
   function endLocalTurn() {
@@ -994,6 +1015,8 @@
     }
   }
 
+  var LAN_INPUT_SEND_MS = 33;
+
   function updateLanGuestInput(ts, dt) {
     // 镜像端本地推进弹道画面；碰撞结果、伤害、地形和回合仍以房主为准。
     game.t += 16; game.fx.update(); game.bg.update(game.t);
@@ -1003,41 +1026,91 @@
       game.active.power = Math.min(100, game.active.power + 0.8);
       RZ.SFX.updateCharge(game.active.power);
     }
-    // 与房主本地 applyHeld 一样按帧响应；房主会把结果合并为 20Hz 状态下发。
-    if (ts - (lan.inputAt || 0) < 16) return;
+    // 画面按 60Hz 立即响应，网络则以约 30Hz 批量上报。这样高 RTT 时不会在
+    // WebSocket 中堆积每秒 60 条小消息，也不让网络是否可写阻塞本地操作。
+    if (ts - (lan.inputAt || 0) >= 16) {
+      var moveDirection = keys.ArrowLeft ? 'left' : keys.ArrowRight ? 'right' : '';
+      if (moveDirection && game.moveActive(moveDirection === 'left' ? -1 : 1)) lan.unsentMoves.push(moveDirection);
+      if (keys.ArrowUp || keys.ArrowDown) {
+        var d = keys.ArrowUp ? 1 : -1;
+        var nextAngle = Math.max(-25, Math.min(90, game.active.aim + d));
+        if (nextAngle !== game.active.aim) {
+          game.active.aim = nextAngle; lan.inputAngle = nextAngle; lan.unsentAngle = nextAngle;
+        }
+      }
+      lan.inputAt = ts;
+    }
+    flushLanContinuousInput(ts, false);
+  }
+
+  function flushLanContinuousInput(ts, force) {
+    if (!force && ts - (lan.lastInputFlushAt || 0) < LAN_INPUT_SEND_MS) return false;
     var sent = false;
-    if (keys.ArrowLeft && sendLanPredictedInput({ action: 'MOVE', direction: 'left' })) { game.moveActive(-1); sent = true; }
-    if (keys.ArrowRight && sendLanPredictedInput({ action: 'MOVE', direction: 'right' })) { game.moveActive(1); sent = true; }
-    if (keys.ArrowUp || keys.ArrowDown) {
-      var d = keys.ArrowUp ? 1 : -1;
-      var nextAngle = Math.max(-25, Math.min(90, (lan.inputAngle == null ? game.active.aim : lan.inputAngle) + d));
-      if (sendLanPredictedInput({ action: 'SET_ANGLE', value: nextAngle })) {
-        lan.inputAngle = nextAngle; game.active.aim = nextAngle; sent = true;
+    while (lan.unsentMoves.length) {
+      var direction = lan.unsentMoves[0], steps = 1;
+      while (steps < 4 && lan.unsentMoves[steps] === direction) steps++;
+      if (!sendLanPredictedInput({ action: 'MOVE', direction: direction, steps: steps })) break;
+      lan.unsentMoves.splice(0, steps); sent = true;
+    }
+    if (lan.unsentAngle != null) {
+      var angle = lan.unsentAngle;
+      if (sendLanPredictedInput({ action: 'SET_ANGLE', value: angle })) {
+        if (lan.unsentAngle === angle) lan.unsentAngle = null;
+        sent = true;
       }
     }
-    if (sent) lan.inputAt = ts;
+    if (sent) lan.lastInputFlushAt = ts;
+    return sent;
   }
 
   function sendLanPredictedInput(action) {
-    action.inputSeq = ++lan.inputSeq;
+    action.inputSeq = (lan.inputSeq || 0) + 1;
     if (!lan.client.sendAction(action)) return false;
+    lan.inputSeq = action.inputSeq;
     lan.pendingInputs.push(action);
     return true;
   }
 
-  function reconcileLanPredictedInputs(state) {
+  function captureLanPredictedControls() {
+    if (!game.active || game.active.playerId !== lan.playerId || game.phase !== 'aim') return null;
+    var hasPrediction = lan.unsentMoves.length > 0 || lan.unsentAngle != null;
+    for (var i = 0; !hasPrediction && i < lan.pendingInputs.length; i++) {
+      var action = lan.pendingInputs[i].action;
+      hasPrediction = action === 'MOVE' || action === 'SET_ANGLE' || action === 'SELECT_WEAPON';
+    }
+    if (!hasPrediction) return null;
+    var u = game.active;
+    return {
+      index: u.index, x: u.x, y: u.y, vy: u.vy, face: u.face, aim: u.aim,
+      fuel: u.fuel, spentThisTurn: u.spentThisTurn, moveSpent: u.moveSpent,
+      airborne: u.airborne, fallFrom: u.fallFrom, weaponIdx: u.weaponIdx
+    };
+  }
+
+  function restoreLanPredictedControls(predicted) {
+    if (!predicted || !game.active || game.active.index !== predicted.index || game.phase !== 'aim') return;
+    var u = game.active;
+    var fields = ['x','y','vy','face','aim','fuel','spentThisTurn','moveSpent','airborne','fallFrom','weaponIdx'];
+    for (var i = 0; i < fields.length; i++) u[fields[i]] = predicted[fields[i]];
+  }
+
+  function reconcileLanPredictedInputs(state, predictedControls) {
     var ack = Number(state.inputAck) || 0;
     lan.inputAck = Math.max(lan.inputAck || 0, ack);
     lan.pendingInputs = lan.pendingInputs.filter(function (input) { return input.inputSeq > lan.inputAck; });
+    if (lan.predictedFireSeq && lan.inputAck >= lan.predictedFireSeq) lan.predictedFireSeq = 0;
     if (!game.active || game.active.playerId !== lan.playerId || game.phase !== 'aim') {
-      lan.pendingInputs.length = 0;
+      lan.pendingInputs.length = 0; lan.unsentMoves.length = 0; lan.unsentAngle = null;
       return;
     }
-    for (var i = 0; i < lan.pendingInputs.length; i++) {
-      var input = lan.pendingInputs[i];
-      if (input.action === 'MOVE') game.moveActive(input.direction === 'left' ? -1 : 1, true);
-      else if (input.action === 'SET_ANGLE') game.active.aim = input.value;
+    var stillPredicted = lan.unsentMoves.length > 0 || lan.unsentAngle != null;
+    for (var i = 0; !stillPredicted && i < lan.pendingInputs.length; i++) {
+      var action = lan.pendingInputs[i].action;
+      stillPredicted = action === 'MOVE' || action === 'SET_ANGLE' || action === 'SELECT_WEAPON';
     }
+    // 保留已经呈现的预测结果，不再对每一份快照重放全部 pending 输入。
+    // RTT 越高，旧实现的重放次数越多；这里把每次校正固定为 O(1)。
+    if (stillPredicted) restoreLanPredictedControls(predictedControls);
   }
 
   function updateLanGuestProjectiles() {
