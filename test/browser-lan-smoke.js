@@ -194,7 +194,9 @@ async function openChrome(gamePort, debugPort, suffix) {
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'}))");
     await sleep(80);
     const predicted = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel,moves:window.__lanDelayedActions.filter(function(a){return a.action==='MOVE';})})");
-    if (predicted.x <= guestBefore.x || predicted.fuel >= guestBefore.fuel || predicted.moves.length > 3 || predicted.moves.some(function(a){return a.steps<1||a.steps>4;})) throw new Error('P2 高延迟下未立即本地预测/批量移动: ' + JSON.stringify({ guestBefore, predicted }));
+    const movedSteps = Math.round((predicted.x - guestBefore.x) / 2);
+    const reportedSteps = predicted.moves.reduce(function (sum, action) { return sum + action.steps; }, 0);
+    if (movedSteps < 2 || predicted.fuel >= guestBefore.fuel || predicted.moves.length >= movedSteps || reportedSteps !== movedSteps || predicted.moves.some(function(a){return a.steps<1||a.steps>4;})) throw new Error('P2 高延迟下未立即本地预测/批量移动: ' + JSON.stringify({ guestBefore, predicted, movedSteps, reportedSteps }));
     console.log('  ok   P2 高延迟下立即本地预测移动');
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowRight'}))");
     await evaluate(guest, "RZ.LanClient.prototype.sendAction=window.__lanOriginalSendAction");
