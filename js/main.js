@@ -4,8 +4,28 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var canvas, ctx, game = null, paused = false, raf = 0;
+  var last = 0, simulationLag = 0;
   var lastTurn = -1, lastWeaponSig = '';
   var lan = null;
+
+  // Chrome 102 在 Windows 7 上经常退回软件 Canvas。游戏逻辑仍以 60Hz
+  // 固定步长推进，只有绘制降到 30fps/较低内部像素，避免画面占满主线程后
+  // 键盘事件排队数百毫秒甚至数秒。
+  var FIXED_STEP_MS = 16;
+  var MAX_CATCH_UP_STEPS = 4;
+  var legacyWindows = typeof navigator !== 'undefined' && /Windows NT 6\.[01]/.test(navigator.userAgent || '');
+  var renderState = {
+    lite: legacyWindows,
+    reason: legacyWindows ? 'windows7' : 'normal',
+    maxFps: legacyWindows ? 30 : 60,
+    scale: legacyWindows ? 0.75 : 1,
+    ratio: 1,
+    lastPaint: 0,
+    averagePaintMs: 0,
+    samples: 0,
+    lastAdaptAt: 0
+  };
+  window.__renderStats = renderState;
 
   var setup = {
     mode: '1v1',
@@ -23,6 +43,37 @@
     for (var i = 0; i < list.length; i++) list[i].classList.remove('active');
     $('screen-' + name).classList.add('active');
     if (name === 'game') resize();
+  }
+
+  function clockNow() {
+    return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  }
+
+  function syncGameRenderProfile() {
+    if (document.body && document.body.classList) document.body.classList.toggle('perf-lite', renderState.lite);
+    if (game && game.setLowQuality) game.setLowQuality(renderState.lite);
+  }
+
+  function resetLoopTiming() {
+    last = 0;
+    simulationLag = 0;
+    renderState.lastPaint = 0;
+    renderState.averagePaintMs = 0;
+    renderState.samples = 0;
+  }
+
+  function enableLiteRendering(reason) {
+    if (!renderState.lite) {
+      renderState.lite = true;
+      renderState.maxFps = 30;
+      renderState.scale = Math.min(renderState.scale, 0.75);
+    }
+    renderState.reason = reason || renderState.reason;
+    renderState.lastAdaptAt = clockNow();
+    renderState.averagePaintMs = 0;
+    renderState.samples = 0;
+    syncGameRenderProfile();
+    resize();
   }
 
   // ================= 局域网大厅 =================
@@ -430,6 +481,8 @@
       guide: setup.guide,
       humanTeam: setup.mode === 'hotseat' ? null : 0
     });
+    resetLoopTiming();
+    syncGameRenderProfile();
     window.__game = game;                       // 调试/自检用的句柄
     game.viewW = canvas.clientWidth; game.viewH = canvas.clientHeight;
     game.cam.x = game.cam.tx = Math.max(0, game.active.x - game.viewW / 2);
@@ -446,12 +499,14 @@
   }
 
   function prepareGameUI() {
+    resetLoopTiming();
+    syncGameRenderProfile();
     window.__game = game;
     game.viewW = canvas.clientWidth; game.viewH = canvas.clientHeight;
     game.cam.x = game.cam.tx = Math.max(0, game.active.x - game.viewW / 2);
     game.cam.y = game.cam.ty = Math.max(0, game.active.y - game.viewH / 2);
     lastTurn = -1; lastWeaponSig = ''; lastItemSig = ''; armedItem = -1;
-    resetHUDCache(); paused = false; last = 0;
+    resetHUDCache(); paused = false;
     $('overlay-pause').classList.remove('show');
     $('overlay-result').classList.remove('show');
     $('overlay-network').classList.remove('show');
@@ -577,6 +632,7 @@
 
   function stopGame() {
     game = null;
+    resetLoopTiming();
     RZ.SFX.stopCharge();
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
   }
@@ -626,6 +682,12 @@
 
   function onKeyUp(k) {
     if (!game || paused || game.result !== null) return;
+    if (lan && lan.inBattle && lan.playerId === 2 &&
+        ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].indexOf(k) >= 0) {
+      // 结束连续操作时立即补发不足一个 33ms 批次的尾部输入，既避免测试/状态
+      // 校正竞态，也让短按方向键在高延迟网络下尽快抵达权威端。
+      flushLanContinuousInput(performance.now ? performance.now() : Date.now(), true);
+    }
     if (k === 'Space' && canControl()) releaseLocalCharge();
   }
 
@@ -982,42 +1044,71 @@
   }
 
   // ================= 主循环 =================
-  var last = 0;
   function loop(ts) {
     raf = requestAnimationFrame(loop);
-    var dt = last ? Math.min(50, ts - last) : 16;
+    var elapsed = last ? Math.max(0, Math.min(64, ts - last)) : FIXED_STEP_MS;
     last = ts;
-    if (!game || !$('screen-game').classList.contains('active')) return;
+    if (!game || !$('screen-game').classList.contains('active')) { simulationLag = 0; return; }
 
     if (!paused && game.result === null && !(lan && lan.inBattle && lan.pausedByNetwork)) {
-      if (lan && lan.inBattle && lan.playerId === 2) {
-        updateLanGuestInput(ts, dt);
-      } else {
-        if (canControl()) game.applyHeld(keys);
-        game.update(dt);
-        if (lan && lan.inBattle && lan.playerId === 1) {
-          var full = game.networkDirty === 'full';
-          if (full || ts - (lan.lastSendAt || 0) >= 50) sendLanSnapshot(full);
+      simulationLag = Math.min(FIXED_STEP_MS * MAX_CATCH_UP_STEPS, simulationLag + elapsed);
+      var steps = 0;
+      while (simulationLag >= FIXED_STEP_MS && steps < MAX_CATCH_UP_STEPS) {
+        if (lan && lan.inBattle && lan.playerId === 2) updateLanGuestInput(FIXED_STEP_MS);
+        else {
+          if (canControl()) game.applyHeld(keys);
+          game.update(FIXED_STEP_MS);
         }
+        simulationLag -= FIXED_STEP_MS;
+        steps++;
       }
-    }
+      // 网络发送按真实时间限频，不能在掉帧补算时连续突发多批数据。
+      if (lan && lan.inBattle && lan.playerId === 2) flushLanContinuousInput(ts, false);
+      if (lan && lan.inBattle && lan.playerId === 1) {
+        var full = game.networkDirty === 'full';
+        if (full || ts - (lan.lastSendAt || 0) >= 50) sendLanSnapshot(full);
+      }
+    } else simulationLag = 0;
+
+    // Win7/软件 Canvas 只绘制 30fps，但上面的输入与物理仍按 60Hz 推进。
+    if (renderState.maxFps < 60 && renderState.lastPaint &&
+        ts - renderState.lastPaint < 1000 / renderState.maxFps - 1) return;
 
     var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w !== renderState.clientWidth || h !== renderState.clientHeight) resize();
+    var paintStarted = clockNow();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    var dpr = window.devicePixelRatio || 1;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(renderState.ratio, 0, 0, renderState.ratio, 0, 0);
     game.draw(ctx, w, h);
     updateHUD();
+    renderState.lastPaint = ts;
+    recordPaintCost(clockNow() - paintStarted, ts);
 
     if (game.result != null && !$('overlay-result').classList.contains('show')) {
       if (game.projectiles.length === 0) showResult();
     }
   }
 
+  function recordPaintCost(cost, ts) {
+    renderState.averagePaintMs = renderState.samples
+      ? renderState.averagePaintMs * 0.9 + cost * 0.1 : cost;
+    renderState.samples++;
+    if (renderState.samples < 20 || ts - renderState.lastAdaptAt < 2500) return;
+    if (!renderState.lite && renderState.averagePaintMs > 24) {
+      enableLiteRendering('adaptive');
+    } else if (renderState.lite && renderState.averagePaintMs > 36 && renderState.scale > 0.56) {
+      renderState.scale = Math.max(0.56, renderState.scale - 0.15);
+      renderState.lastAdaptAt = ts;
+      renderState.averagePaintMs = 0;
+      renderState.samples = 0;
+      resize();
+    }
+  }
+
   var LAN_INPUT_SEND_MS = 33;
 
-  function updateLanGuestInput(ts, dt) {
+  function updateLanGuestInput(dt) {
     // 镜像端本地推进弹道画面；碰撞结果、伤害、地形和回合仍以房主为准。
     game.t += 16; game.fx.update(); game.bg.update(game.t);
     advanceLanGuestProjectiles(dt);
@@ -1028,19 +1119,15 @@
     }
     // 画面按 60Hz 立即响应，网络则以约 30Hz 批量上报。这样高 RTT 时不会在
     // WebSocket 中堆积每秒 60 条小消息，也不让网络是否可写阻塞本地操作。
-    if (ts - (lan.inputAt || 0) >= 16) {
-      var moveDirection = keys.ArrowLeft ? 'left' : keys.ArrowRight ? 'right' : '';
-      if (moveDirection && game.moveActive(moveDirection === 'left' ? -1 : 1)) lan.unsentMoves.push(moveDirection);
-      if (keys.ArrowUp || keys.ArrowDown) {
-        var d = keys.ArrowUp ? 1 : -1;
-        var nextAngle = Math.max(-25, Math.min(90, game.active.aim + d));
-        if (nextAngle !== game.active.aim) {
-          game.active.aim = nextAngle; lan.inputAngle = nextAngle; lan.unsentAngle = nextAngle;
-        }
+    var moveDirection = keys.ArrowLeft ? 'left' : keys.ArrowRight ? 'right' : '';
+    if (moveDirection && game.moveActive(moveDirection === 'left' ? -1 : 1)) lan.unsentMoves.push(moveDirection);
+    if (keys.ArrowUp || keys.ArrowDown) {
+      var d = keys.ArrowUp ? 1 : -1;
+      var nextAngle = Math.max(-25, Math.min(90, game.active.aim + d));
+      if (nextAngle !== game.active.aim) {
+        game.active.aim = nextAngle; lan.inputAngle = nextAngle; lan.unsentAngle = nextAngle;
       }
-      lan.inputAt = ts;
     }
-    flushLanContinuousInput(ts, false);
   }
 
   function flushLanContinuousInput(ts, force) {
@@ -1143,9 +1230,25 @@
 
   function resize() {
     if (!canvas) return;
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(canvas.clientWidth * dpr);
-    canvas.height = Math.round(canvas.clientHeight * dpr);
+    var clientWidth = Math.max(1, canvas.clientWidth | 0);
+    var clientHeight = Math.max(1, canvas.clientHeight | 0);
+    var dpr = Math.max(1, Math.min(renderState.lite ? 1 : 1.25, window.devicePixelRatio || 1));
+    var ratio = dpr * renderState.scale;
+    // 限制软件 Canvas 的总像素数；CSS 负责放大，游戏世界坐标保持不变。
+    var maxPixels = renderState.lite ? 700000 : 1500000;
+    ratio = Math.min(ratio, Math.sqrt(maxPixels / (clientWidth * clientHeight)));
+    ratio = Math.max(0.5, ratio);
+    var pixelWidth = Math.max(1, Math.round(clientWidth * ratio));
+    var pixelHeight = Math.max(1, Math.round(clientHeight * ratio));
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+    renderState.clientWidth = clientWidth;
+    renderState.clientHeight = clientHeight;
+    renderState.ratio = ratio;
+    if (ctx) {
+      ctx.imageSmoothingEnabled = true;
+      if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = renderState.lite ? 'low' : 'medium';
+    }
     if (game) { game.viewW = canvas.clientWidth; game.viewH = canvas.clientHeight; }
   }
   window.addEventListener('resize', resize);
@@ -1153,7 +1256,10 @@
   // ================= 启动 =================
   window.addEventListener('DOMContentLoaded', function () {
     canvas = $('stage');
-    ctx = canvas.getContext('2d');
+    // alpha:false 避免每帧与页面背景做透明合成；desynchronized 在支持的
+    // Chrome 上缩短输入到画面的排队时间，旧浏览器会安全忽略该提示。
+    ctx = canvas.getContext('2d', { alpha: false, desynchronized: true }) || canvas.getContext('2d');
+    syncGameRenderProfile();
     buildMaps();
     buildVehicles();
     buildShop();

@@ -124,6 +124,7 @@ async function openChrome(gamePort, debugPort, suffix) {
   const proc = spawn(chrome, [
     '--headless=new', '--disable-gpu', '--disable-dev-shm-usage', '--no-sandbox', '--hide-scrollbars',
     '--no-first-run', '--no-default-browser-check', '--remote-debugging-address=127.0.0.1',
+    '--user-agent=Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36',
     '--remote-debugging-port=' + debugPort, '--user-data-dir=' + profile,
     'http://127.0.0.1:' + gamePort + '/'
   ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
@@ -156,8 +157,9 @@ async function openChrome(gamePort, debugPort, suffix) {
   try {
     one = await openChrome(gamePort, debugPort, 'one');
     const client = one.client;
-    const v = await evaluate(client, "({title:document.title,menu:!!document.getElementById('btn-lan-menu'),game:typeof RZ.Game,network:typeof RZ.LanClient})");
+    const v = await evaluate(client, "({title:document.title,menu:!!document.getElementById('btn-lan-menu'),game:typeof RZ.Game,network:typeof RZ.LanClient,render:window.__renderStats,lite:document.body.classList.contains('perf-lite')})");
     if (!v.menu || v.game !== 'function' || v.network !== 'function') throw new Error('脚本或菜单未加载: ' + JSON.stringify(v));
+    if (!v.render || !v.render.lite || v.render.maxFps !== 30 || !v.lite) throw new Error('Win7 低延迟渲染档未启用: ' + JSON.stringify(v));
     await evaluate(client, "document.getElementById('btn-lan-menu').click()");
     await sleep(300);
     await evaluate(client, "document.getElementById('btn-create-room').click()");
@@ -165,6 +167,7 @@ async function openChrome(gamePort, debugPort, suffix) {
     const l = await evaluate(client, "({screen:document.getElementById('screen-lan').classList.contains('active'),room:document.getElementById('lan-room-id').textContent,connection:document.getElementById('lan-connection').textContent,entryHidden:document.getElementById('lan-entry').hidden})");
     if (!l.screen || !/^\d{6}$/.test(l.room) || !l.entryHidden) throw new Error('大厅创建房间失败: ' + JSON.stringify(l));
     console.log('  ok   浏览器加载单机首页且未发生脚本错误');
+    console.log('  ok   Win7 / Chrome 102 自动启用低延迟渲染档');
     console.log('  ok   浏览器主动进入 LAN 后建立 WebSocket');
     console.log('  ok   浏览器创建 6 位房间并显示大厅');
 
@@ -193,12 +196,12 @@ async function openChrome(gamePort, debugPort, suffix) {
     await evaluate(guest, "(function(){var p=RZ.LanClient.prototype,o=p.sendAction;window.__lanOriginalSendAction=o;window.__lanDelayedActions=[];p.sendAction=function(a){var self=this;window.__lanDelayedActions.push(Object.assign({},a));setTimeout(function(){o.call(self,a);},600);return true;};})()");
     await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight'}))");
     await sleep(80);
+    await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowRight'}))");
     const predicted = await evaluate(guest, "({x:window.__game.active.x,fuel:window.__game.active.fuel,moves:window.__lanDelayedActions.filter(function(a){return a.action==='MOVE';})})");
     const movedSteps = Math.round((predicted.x - guestBefore.x) / 2);
     const reportedSteps = predicted.moves.reduce(function (sum, action) { return sum + action.steps; }, 0);
     if (movedSteps < 2 || predicted.fuel >= guestBefore.fuel || predicted.moves.length >= movedSteps || reportedSteps !== movedSteps || predicted.moves.some(function(a){return a.steps<1||a.steps>4;})) throw new Error('P2 高延迟下未立即本地预测/批量移动: ' + JSON.stringify({ guestBefore, predicted, movedSteps, reportedSteps }));
     console.log('  ok   P2 高延迟下立即本地预测移动');
-    await evaluate(guest, "window.dispatchEvent(new KeyboardEvent('keyup',{key:'ArrowRight'}))");
     await evaluate(guest, "RZ.LanClient.prototype.sendAction=window.__lanOriginalSendAction");
     await sleep(850);
     const after = await evaluate(client, "({player:window.__game.active.playerId,x:window.__game.active.x,fuel:window.__game.active.fuel})");
@@ -244,5 +247,5 @@ async function openChrome(gamePort, debugPort, suffix) {
     if (two) two.proc.kill();
     await new Promise(resolve => app.server.close(resolve));
   }
-  console.log('\n✅ Browser LAN Smoke 通过 12 项');
+  console.log('\n✅ Browser LAN Smoke 通过 13 项');
 })().catch(err => { console.error('\n❌ Browser LAN Smoke 失败\n' + err.stack); process.exitCode = 1; });

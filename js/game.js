@@ -106,6 +106,9 @@
     this.result = null;
     this.messages = [];
     this.t = 0;
+    this.lowQuality = false;
+    this.nextMoveSoundAt = 0;
+    this.nextStunMessageAt = 0;
     this.networkVersion = 0;
     this.networkDirty = 'full';
     this.networkEvent = typeof opts.networkEvent === 'function' ? opts.networkEvent : null;
@@ -118,6 +121,11 @@
 
     this.beginTurn(true);
   }
+
+  Game.prototype.setLowQuality = function (enabled) {
+    this.lowQuality = !!enabled;
+    this.fx.lowQuality = this.lowQuality;
+  };
 
   Game.prototype.aliveOf = function (team) {
     return this.units.filter(function (u) { return u.alive && u.team === team; });
@@ -627,7 +635,13 @@
   Game.prototype.moveActive = function (dir, silent) {
     var u = this.active;
     if (!u || this.phase !== 'aim' || u.airborne || u.fuel <= 0 || (dir !== -1 && dir !== 1)) return false;
-    if (u.stunned > 0) { if (!silent && (this.t & 31) === 0) this.say('被麻痹了，动不了'); return false; }
+    if (u.stunned > 0) {
+      if (!silent && this.t >= this.nextStunMessageAt) {
+        this.nextStunMessageAt = this.t + 500;
+        this.say('被麻痹了，动不了');
+      }
+      return false;
+    }
     var beforeX = u.x, beforeFuel = u.fuel, beforeFace = u.face;
     u.face = dir;
     var cost = u.vehicle.moveCost;
@@ -653,9 +667,15 @@
       this.spend(u, step, 'move');
       stepsLeft--;
     }
-    if (!silent && (this.t & 7) === 0) RZ.SFX.move();
-    this.markNetwork('light');
-    return u.x !== beforeX || u.fuel !== beforeFuel || u.face !== beforeFace;
+    var changed = u.x !== beforeX || u.fuel !== beforeFuel || u.face !== beforeFace;
+    // this.t 每帧增加 16；旧的 (this.t & 7) 判断因此永远为 0，按住方向键
+    // 会每秒创建约 60 组 WebAudio 节点，在 Win7 上很快拖垮主线程。
+    if (!silent && u.x !== beforeX && this.t >= this.nextMoveSoundAt) {
+      this.nextMoveSoundAt = this.t + 96;
+      RZ.SFX.move();
+    }
+    if (changed) this.markNetwork('light');
+    return changed;
   };
 
   /** 每帧处理「按住不放」的按键；keys 是 {按键名: 布尔} */
@@ -987,28 +1007,48 @@
     this.viewW = viewW; this.viewH = viewH;
     var shakeX = (Math.random() - 0.5) * this.cam.shake * 2;
     var shakeY = (Math.random() - 0.5) * this.cam.shake * 2;
+    var viewLeft = this.cam.x + shakeX, viewTop = this.cam.y + shakeY;
+    var bounds = {
+      x0: viewLeft - 80, y0: viewTop - 100,
+      x1: viewLeft + viewW + 80, y1: viewTop + viewH + 100
+    };
 
     ctx.save();
-    ctx.translate(-Math.round(this.cam.x + shakeX), -Math.round(this.cam.y + shakeY));
+    ctx.translate(-Math.round(viewLeft), -Math.round(viewTop));
 
-    this.bg.draw(ctx, this.cam, this.t, this.night);
+    this.bg.draw(ctx, { x: viewLeft, y: viewTop }, this.t, this.night, viewW, viewH, this.lowQuality);
     this.terrain.flush();
-    ctx.drawImage(this.terrain.canvas, 0, 0);
+    // 显式裁出视口，避免 Win7 软件 Canvas 每帧搬运整张 1900x800 地形位图。
+    var terrainX = Math.max(0, Math.floor(viewLeft) - 2);
+    var terrainY = Math.max(0, Math.floor(viewTop) - 2);
+    var terrainW = Math.min(RZ.WORLD_W - terrainX, Math.ceil(viewW) + 4);
+    var terrainH = Math.min(RZ.WORLD_H - terrainY, Math.ceil(viewH) + 4);
+    if (terrainW > 0 && terrainH > 0) {
+      ctx.drawImage(this.terrain.canvas, terrainX, terrainY, terrainW, terrainH,
+        terrainX, terrainY, terrainW, terrainH);
+    }
 
     // 水下 / 熔岩氛围
     if (this.map.haze) {
       ctx.fillStyle = this.map.haze;
-      ctx.fillRect(-400, -400, RZ.WORLD_W + 800, RZ.WORLD_H + 800);
+      ctx.fillRect(viewLeft - 2, viewTop - 2, viewW + 4, viewH + 4);
     }
 
     var i;
-    for (i = 0; i < this.supplies.length; i++) RZ.drawSupply(ctx, this.supplies[i], this.t);
+    for (i = 0; i < this.supplies.length; i++) {
+      var supply = this.supplies[i];
+      if (supply.x >= bounds.x0 && supply.x <= bounds.x1 && supply.y >= bounds.y0 && supply.y <= bounds.y1) {
+        RZ.drawSupply(ctx, supply, this.t);
+      }
+    }
 
     var viewer = this.viewerTeam();
     for (i = 0; i < this.units.length; i++) {
       var u = this.units[i];
       if (!u.alive || this.hiddenFrom(viewer, u)) continue;   // 隐身：整辆车都不画
-      RZ.drawUnit(ctx, u, this.t, { active: u === this.active && this.result === null });
+      if (u.x >= bounds.x0 && u.x <= bounds.x1 && u.y >= bounds.y0 && u.y <= bounds.y1) {
+        RZ.drawUnit(ctx, u, this.t, { active: u === this.active && this.result === null, lowQuality: this.lowQuality });
+      }
     }
 
     // 只提示炮口指向，不预测落点——预测线会随蓄力乱跳，反而干扰手感
@@ -1017,14 +1057,22 @@
       RZ.drawAimRay(ctx, this.active, RZ.TEAM_COLORS[this.active.team]);
     }
 
-    for (i = 0; i < this.projectiles.length; i++) RZ.drawProjectile(ctx, this.projectiles[i], this.t);
+    for (i = 0; i < this.projectiles.length; i++) {
+      var projectile = this.projectiles[i];
+      if (projectile.x >= bounds.x0 - 160 && projectile.x <= bounds.x1 + 160 &&
+          projectile.y >= bounds.y0 - 160 && projectile.y <= bounds.y1 + 160) {
+        RZ.drawProjectile(ctx, projectile, this.t, this.lowQuality);
+      }
+    }
     for (i = 0; i < this.effects.length; i++) {
       var e = this.effects[i];
-      if (e.type === 'bolt') RZ.drawBolt(ctx, e.x, e.y0, e.y1, e.life);
+      if (e.type === 'bolt' && e.x >= bounds.x0 && e.x <= bounds.x1) {
+        RZ.drawBolt(ctx, e.x, e.y0, e.y1, e.life, this.lowQuality);
+      }
     }
 
-    this.fx.draw(ctx);
-    this.fx.drawTexts(ctx);
+    this.fx.draw(ctx, bounds);
+    this.fx.drawTexts(ctx, bounds);
 
     // 屏幕外战车的方向指示
     for (i = 0; i < this.units.length; i++) {

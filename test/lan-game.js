@@ -30,6 +30,7 @@ console.log('\nLAN Game Sync');
   const copy = game(2);
   check(copy.terrain.importMaskRLE(rle), '地形 RLE 快照可导入');
   check(Buffer.from(copy.terrain.mask).equals(Buffer.from(g.terrain.mask)), 'Terrain 掩码同步一致');
+  check(copy.terrain.importMaskRLE(rle) && !copy.terrain.lastImportRepainted, '相同地形快照跳过整图重绘');
   check(JSON.stringify(rle).length < 64 * 1024, '地形快照低于单条协议上限');
 }
 

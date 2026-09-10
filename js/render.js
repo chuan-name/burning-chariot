@@ -3,12 +3,14 @@
   'use strict';
 
   // ================= 粒子 =================
-  function Particles() { this.list = []; this.texts = []; }
+  function Particles() { this.list = []; this.texts = []; this.lowQuality = false; }
 
-  Particles.prototype.add = function (p) { if (this.list.length < 1400) this.list.push(p); };
+  Particles.prototype.add = function (p) {
+    if (this.list.length < (this.lowQuality ? 420 : 1400)) this.list.push(p);
+  };
 
   Particles.prototype.burst = function (x, y, r, colors) {
-    var n = Math.min(90, 22 + r | 0);
+    var n = Math.min(this.lowQuality ? 42 : 90, 22 + r | 0);
     for (var i = 0; i < n; i++) {
       var a = Math.random() * Math.PI * 2, s = Math.random() * (r * 0.16) + 1.2;
       this.add({
@@ -17,7 +19,7 @@
         c: colors[(Math.random() * colors.length) | 0], grav: 0.10, kind: 'spark'
       });
     }
-    for (i = 0; i < n * 0.5; i++) {
+    for (i = 0; i < n * (this.lowQuality ? 0.28 : 0.5); i++) {
       var a2 = Math.random() * Math.PI * 2, s2 = Math.random() * (r * 0.07);
       this.add({
         x: x, y: y, vx: Math.cos(a2) * s2, vy: Math.sin(a2) * s2 - 0.8,
@@ -28,6 +30,7 @@
   };
 
   Particles.prototype.debris = function (x, y, n, color) {
+    if (this.lowQuality) n = Math.ceil(n * 0.55);
     for (var i = 0; i < n; i++) {
       var a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4, s = 1.5 + Math.random() * 5;
       this.add({
@@ -67,11 +70,13 @@
     t.length = j;
   };
 
-  Particles.prototype.draw = function (ctx) {
+  Particles.prototype.draw = function (ctx, bounds) {
     var l = this.list, i;
     ctx.save();
     for (i = 0; i < l.length; i++) {
       var p = l[i], a = p.life / p.max;
+      if (bounds && (p.x < bounds.x0 || p.x > bounds.x1 || p.y < bounds.y0 || p.y > bounds.y1)) continue;
+      if (this.lowQuality && p.kind === 'smoke' && (i & 1)) continue;
       ctx.globalAlpha = p.kind === 'smoke' ? a * 0.5 : a;
       ctx.fillStyle = p.c;
       if (p.kind === 'smoke') {
@@ -85,12 +90,13 @@
     ctx.restore();
   };
 
-  Particles.prototype.drawTexts = function (ctx) {
+  Particles.prototype.drawTexts = function (ctx, bounds) {
     var t = this.texts;
     ctx.save();
     ctx.textAlign = 'center';
     for (var i = 0; i < t.length; i++) {
       var o = t[i], a = Math.min(1, o.life / 30);
+      if (bounds && (o.x < bounds.x0 || o.x > bounds.x1 || o.y < bounds.y0 || o.y > bounds.y1)) continue;
       ctx.globalAlpha = a;
       ctx.font = (o.big ? 'bold 26px ' : 'bold 18px ') + RZ.FONT;
       ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.75)';
@@ -134,26 +140,30 @@
   };
 
   /** 天空按世界坐标铺满，视差较弱以保持辨识度 */
-  Background.prototype.draw = function (ctx, cam, t, night) {
+  Background.prototype.draw = function (ctx, cam, t, night, viewW, viewH, lowQuality) {
     var m = this.map, W = RZ.WORLD_W, H = RZ.WORLD_H;
+    viewW = viewW || W; viewH = viewH || H;
+    var x0 = cam ? cam.x - 100 : -400, y0 = cam ? cam.y - 100 : -400;
+    var x1 = x0 + viewW + 200, y1 = y0 + viewH + 200;
     var g = ctx.createLinearGradient(0, 0, 0, H);
     g.addColorStop(0, m.sky[0]); g.addColorStop(0.55, m.sky[1]); g.addColorStop(1, m.sky[2]);
     ctx.fillStyle = g;
-    ctx.fillRect(-400, -400, W + 800, H + 800);
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 
     if (night > 0) {                       // 昼夜变化
       ctx.save();
       ctx.globalAlpha = night * 0.55;
       ctx.fillStyle = '#0a1030';
-      ctx.fillRect(-400, -400, W + 800, H + 800);
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
       ctx.restore();
     }
 
     var i;
     if (m.stars || night > 0.35) {
       ctx.save();
-      for (i = 0; i < this.stars.length; i++) {
+      for (i = 0; i < this.stars.length; i += lowQuality ? 2 : 1) {
         var s = this.stars[i];
+        if (s.x < x0 || s.x > x1 || s.y < y0 || s.y > y1) continue;
         ctx.globalAlpha = (m.stars ? 0.85 : night) * (0.45 + 0.55 * Math.abs(Math.sin(t * 0.001 + s.p)));
         ctx.fillStyle = '#fff';
         ctx.fillRect(s.x, s.y, s.r, s.r);
@@ -163,8 +173,9 @@
 
     if (m.clouds) {
       ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = '#ffffff';
-      for (i = 0; i < this.clouds.length; i++) {
+      for (i = 0; i < this.clouds.length; i += lowQuality ? 2 : 1) {
         var c = this.clouds[i];
+        if (c.x < x0 - 140 || c.x > x1 + 140 || c.y < y0 - 100 || c.y > y1 + 100) continue;
         puffCloud(ctx, c.x, c.y, 60 * c.s);
       }
       ctx.restore();
@@ -172,8 +183,9 @@
 
     if (m.bubbles || m.embers) {
       ctx.save();
-      for (i = 0; i < this.motes.length; i++) {
+      for (i = 0; i < this.motes.length; i += lowQuality ? 2 : 1) {
         var o = this.motes[i];
+        if (o.x < x0 || o.x > x1 || o.y < y0 || o.y > y1) continue;
         ctx.globalAlpha = m.embers ? 0.55 : 0.35;
         ctx.fillStyle = m.embers ? '#ff8a3d' : '#bfefff';
         ctx.beginPath(); ctx.arc(o.x, o.y, o.r, 0, 6.2832); ctx.fill();
@@ -186,11 +198,13 @@
     ctx.globalAlpha = 0.22;
     ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.moveTo(-400, H);
-    for (var x = -400; x <= W + 400; x += 80) {
+    var mountainX0 = Math.floor((x0 - 80) / 80) * 80;
+    var mountainX1 = Math.ceil((x1 + 80) / 80) * 80;
+    ctx.moveTo(mountainX0, H);
+    for (var x = mountainX0; x <= mountainX1; x += 80) {
       ctx.lineTo(x, H * 0.62 + Math.sin(x * 0.0032) * 70 + Math.sin(x * 0.011) * 24);
     }
-    ctx.lineTo(W + 400, H); ctx.closePath(); ctx.fill();
+    ctx.lineTo(mountainX1, H); ctx.closePath(); ctx.fill();
     ctx.restore();
   };
 
@@ -367,7 +381,7 @@
     ctx.save();
     ctx.globalAlpha = 0.28; ctx.fillStyle = '#000';
     ctx.beginPath(); ctx.ellipse(0, 0, 22, 5, 0, 0, 6.2832); ctx.fill();
-    ctx.globalCompositeOperation = 'lighter';
+    if (!opts.lowQuality) ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = opts.active ? 0.55 : 0.32;
     ctx.strokeStyle = RZ.TEAM_COLORS[u.team];
     ctx.lineWidth = 2.5;
@@ -400,7 +414,7 @@
 
     if (u.hitFlash > 0) {
       ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
+      if (!opts.lowQuality) ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(0.75, u.hitFlash / 12);
       ctx.fillStyle = '#fff';
       ctx.beginPath(); ctx.ellipse(0, -22, 30, 28, 0, 0, 6.2832); ctx.fill();
@@ -471,21 +485,23 @@
   };
 
   /** 弹体 */
-  RZ.drawProjectile = function (ctx, p, t) {
+  RZ.drawProjectile = function (ctx, p, t, lowQuality) {
     var s = p.w.shell;
     if (p.trail && p.trail.length > 3) {
       ctx.save();
       ctx.strokeStyle = s.trail; ctx.lineWidth = 2.2; ctx.globalAlpha = 0.45;
       ctx.beginPath();
       ctx.moveTo(p.trail[0], p.trail[1]);
-      for (var i = 2; i < p.trail.length; i += 2) ctx.lineTo(p.trail[i], p.trail[i + 1]);
+      for (var i = lowQuality ? 4 : 2; i < p.trail.length; i += lowQuality ? 4 : 2) {
+        ctx.lineTo(p.trail[i], p.trail[i + 1]);
+      }
       ctx.stroke();
       ctx.restore();
     }
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(Math.atan2(p.vy, p.vx));
-    ctx.globalCompositeOperation = 'lighter';
+    if (!lowQuality) ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = s.glow; ctx.globalAlpha = 0.55;
     ctx.beginPath(); ctx.ellipse(-4, 0, s.r * 2.6, s.r * 1.5, 0, 0, 6.2832); ctx.fill();
     ctx.globalCompositeOperation = 'source-over';
@@ -496,11 +512,11 @@
   };
 
   /** 落雷特效 */
-  RZ.drawBolt = function (ctx, x, y0, y1, life) {
+  RZ.drawBolt = function (ctx, x, y0, y1, life, lowQuality) {
     ctx.save();
     ctx.globalAlpha = Math.min(1, life / 10);
     ctx.strokeStyle = '#cfe4ff'; ctx.lineWidth = 5; ctx.lineJoin = 'round';
-    ctx.shadowColor = '#6a9bff'; ctx.shadowBlur = 18;
+    if (!lowQuality) { ctx.shadowColor = '#6a9bff'; ctx.shadowBlur = 18; }
     ctx.beginPath();
     ctx.moveTo(x, y0);
     var steps = 14;

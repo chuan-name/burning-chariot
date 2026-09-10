@@ -141,18 +141,26 @@
         var i = y * WORLD_W + x, o = i * 4;
         if (!mask[i]) { d[o + 3] = 0; depth[x] = -1; continue; }
         depth[x] = depth[x] < 0 ? 0 : depth[x] + 1;
-        var dep = depth[x], c;
-        if (dep < 2) c = line;
-        else if (dep < 14) c = top;
-        else if (dep < 90) c = mix(body, top, Math.max(0, 1 - (dep - 14) / 76) * 0.5);
-        else c = mix(deep, body, Math.max(0, 1 - (dep - 90) / 180) * 0.6);
+        var dep = depth[x], cr, cg, cb, t;
+        if (dep < 2) { cr = line[0]; cg = line[1]; cb = line[2]; }
+        else if (dep < 14) { cr = top[0]; cg = top[1]; cb = top[2]; }
+        else if (dep < 90) {
+          t = Math.max(0, 1 - (dep - 14) / 76) * 0.5;
+          cr = body[0] + (top[0] - body[0]) * t;
+          cg = body[1] + (top[1] - body[1]) * t;
+          cb = body[2] + (top[2] - body[2]) * t;
+        } else {
+          t = Math.max(0, 1 - (dep - 90) / 180) * 0.6;
+          cr = deep[0] + (body[0] - deep[0]) * t;
+          cg = deep[1] + (body[1] - deep[1]) * t;
+          cb = deep[2] + (body[2] - deep[2]) * t;
+        }
         var n = (Math.random() - 0.5) * 16;
-        d[o] = clamp8(c[0] + n); d[o + 1] = clamp8(c[1] + n); d[o + 2] = clamp8(c[2] + n); d[o + 3] = 255;
+        d[o] = clamp8(cr + n); d[o + 1] = clamp8(cg + n); d[o + 2] = clamp8(cb + n); d[o + 3] = 255;
       }
     }
   }
   function hex(h) { var v = parseInt(h.slice(1), 16); return [v >> 16 & 255, v >> 8 & 255, v & 255]; }
-  function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
   function clamp8(v) { return v < 0 ? 0 : v > 255 ? 255 : v | 0; }
 
   // --- Terrain 对象 -----------------------------------------------------
@@ -169,6 +177,7 @@
     paint(this.mask, this.img, mapDef);
     this.ctx.putImageData(this.img, 0, 0);
     this.dirty = null;
+    this.lastImportRepainted = false;
   }
 
   Terrain.prototype.solid = function (x, y) {
@@ -271,7 +280,23 @@
       total += rle[i];
     }
     if (total !== this.mask.length) return false;
-    var at = 0, value = rle[0];
+
+    // 客户端通常已经通过 EXPLOSION / TERRAIN_TUNNEL 增量事件更新了地形。
+    // 完整快照仍用于纠错，但掩码一致时不要再次为 152 万像素上色并上传 Canvas。
+    var at = 0, value = rle[0], changed = false, end, p;
+    for (i = 1; i < rle.length; i++) {
+      end = at + rle[i];
+      if (!changed) {
+        for (p = at; p < end; p++) {
+          if (this.mask[p] !== value) { changed = true; break; }
+        }
+      }
+      at = end; value = value ? 0 : 1;
+    }
+    this.lastImportRepainted = changed;
+    if (!changed) return true;
+
+    at = 0; value = rle[0];
     for (i = 1; i < rle.length; i++) {
       this.mask.fill(value, at, at + rle[i]);
       at += rle[i]; value = value ? 0 : 1;
