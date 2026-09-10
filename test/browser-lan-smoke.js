@@ -187,6 +187,10 @@ async function openChrome(gamePort, debugPort, suffix) {
     if (!battle1.screen || !battle2.screen || battle1.local !== 1 || battle2.local !== 2) throw new Error('双方未进入战场: ' + JSON.stringify({ battle1, battle2 }));
     console.log('  ok   双方准备后进入 P1 权威战场');
 
+    const canvasLayout = await evaluate(guest, "(function(){var c=document.getElementById('stage'),r=c.getBoundingClientRect();return {width:r.width,height:r.height,viewportWidth:window.innerWidth,viewportHeight:window.innerHeight,backingWidth:c.width,backingHeight:c.height,render:window.__renderStats};})()");
+    if (Math.abs(canvasLayout.width - canvasLayout.viewportWidth) > 2 || Math.abs(canvasLayout.height - canvasLayout.viewportHeight) > 2 || !canvasLayout.render || canvasLayout.render.desynchronized !== false) throw new Error('Win7 Canvas 未保持全屏显示: ' + JSON.stringify(canvasLayout));
+    console.log('  ok   Win7 低分辨率 Canvas 仍保持全屏显示');
+
     // P1 跳过第一手，让 P2 获得操作权；P2 的输入必须经 WebSocket 在 P1 Game 中执行。
     await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));window.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter'}))");
     await sleep(800);
@@ -247,5 +251,5 @@ async function openChrome(gamePort, debugPort, suffix) {
     if (two) two.proc.kill();
     await new Promise(resolve => app.server.close(resolve));
   }
-  console.log('\n✅ Browser LAN Smoke 通过 13 项');
+  console.log('\n✅ Browser LAN Smoke 通过 14 项');
 })().catch(err => { console.error('\n❌ Browser LAN Smoke 失败\n' + err.stack); process.exitCode = 1; });
