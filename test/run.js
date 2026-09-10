@@ -109,6 +109,18 @@ head('玩家操作');
     `x ${x0} → ${u.x.toFixed(0)}，燃料 ${fuel0} → ${u.fuel.toFixed(0)}`);
   check(u.face === 1, '朝向跟着移动方向翻转');
 
+  // 移动音效必须节流。旧实现用 (t & 7)，而 t 每帧增加 16，导致条件
+  // 永远成立并在旧版 Chrome 中每秒创建约 60 组 WebAudio 节点。
+  const soundGame = newGame('dry', duel(v, RZ.VEHICLES[1], false));
+  const soundUnit = soundGame.active;
+  flatten(soundGame); soundUnit.y = 600; soundUnit.x = 500; soundUnit.fuel = 200;
+  const originalMoveSound = RZ.SFX.move;
+  let moveSounds = 0;
+  RZ.SFX.move = () => { moveSounds++; };
+  for (let i = 0; i < 60; i++) { soundGame.moveActive(1); soundGame.t += 16; }
+  RZ.SFX.move = originalMoveSound;
+  check(moveSounds >= 8 && moveSounds <= 11, '持续移动音效已节流', `60 帧只创建 ${moveSounds} 次音效`);
+
   u.aim = 45;
   g.startCharge();
   for (let i = 0; i < 40; i++) g.update(16);

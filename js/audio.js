@@ -29,6 +29,9 @@
     g.gain.exponentialRampToValueAtTime(vol || 0.2, ctx.currentTime + 0.012);
     g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
     o.connect(g); g.connect(master);
+    o.onended = function () {
+      try { o.disconnect(); g.disconnect(); } catch (e) { /* 旧版 WebAudio */ }
+    };
     o.start(); o.stop(ctx.currentTime + dur + 0.02);
   }
 
@@ -42,6 +45,9 @@
     g.gain.setValueAtTime(vol, ctx.currentTime);
     g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
     s.connect(f); f.connect(g); g.connect(master);
+    s.onended = function () {
+      try { s.disconnect(); f.disconnect(); g.disconnect(); } catch (e) { /* 旧版 WebAudio */ }
+    };
     s.start(); s.stop(ctx.currentTime + dur + 0.02);
   }
 
