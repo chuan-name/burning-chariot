@@ -20,6 +20,7 @@
     maxFps: legacyWindows ? 30 : 60,
     scale: legacyWindows ? 0.75 : 1,
     ratio: 1,
+    desynchronized: !legacyWindows,
     lastPaint: 0,
     averagePaintMs: 0,
     samples: 0,
@@ -47,6 +48,18 @@
 
   function clockNow() {
     return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  }
+
+  function gameViewportSize() {
+    var host = $('screen-game');
+    var root = document.documentElement;
+    var width = host && host.clientWidth;
+    var height = host && host.clientHeight;
+    // screen-game 隐藏时尺寸为 0；使用视口作为初始化回退，绝不从已缩小的
+    // Canvas backing store 反推显示尺寸。
+    if (!width) width = (root && root.clientWidth) || window.innerWidth || 1;
+    if (!height) height = (root && root.clientHeight) || window.innerHeight || 1;
+    return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
   }
 
   function syncGameRenderProfile() {
@@ -484,7 +497,8 @@
     resetLoopTiming();
     syncGameRenderProfile();
     window.__game = game;                       // 调试/自检用的句柄
-    game.viewW = canvas.clientWidth; game.viewH = canvas.clientHeight;
+    var viewport = gameViewportSize();
+    game.viewW = viewport.width; game.viewH = viewport.height;
     game.cam.x = game.cam.tx = Math.max(0, game.active.x - game.viewW / 2);
     game.cam.y = game.cam.ty = Math.max(0, game.active.y - game.viewH / 2);
     lastTurn = -1; lastWeaponSig = ''; lastItemSig = ''; armedItem = -1;
@@ -502,7 +516,8 @@
     resetLoopTiming();
     syncGameRenderProfile();
     window.__game = game;
-    game.viewW = canvas.clientWidth; game.viewH = canvas.clientHeight;
+    var viewport = gameViewportSize();
+    game.viewW = viewport.width; game.viewH = viewport.height;
     game.cam.x = game.cam.tx = Math.max(0, game.active.x - game.viewW / 2);
     game.cam.y = game.cam.ty = Math.max(0, game.active.y - game.viewH / 2);
     lastTurn = -1; lastWeaponSig = ''; lastItemSig = ''; armedItem = -1;
@@ -1074,7 +1089,7 @@
     if (renderState.maxFps < 60 && renderState.lastPaint &&
         ts - renderState.lastPaint < 1000 / renderState.maxFps - 1) return;
 
-    var w = canvas.clientWidth, h = canvas.clientHeight;
+    var viewport = gameViewportSize(), w = viewport.width, h = viewport.height;
     if (w !== renderState.clientWidth || h !== renderState.clientHeight) resize();
     var paintStarted = clockNow();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1230,8 +1245,13 @@
 
   function resize() {
     if (!canvas) return;
-    var clientWidth = Math.max(1, canvas.clientWidth | 0);
-    var clientHeight = Math.max(1, canvas.clientHeight | 0);
+    var viewport = gameViewportSize();
+    var clientWidth = viewport.width;
+    var clientHeight = viewport.height;
+    // Chrome 102 / Win7 有时会把低分辨率 backing store 当成元素布局尺寸。
+    // 显式固定 CSS 像素尺寸，内部 canvas.width/height 仍可独立降采样。
+    canvas.style.width = clientWidth + 'px';
+    canvas.style.height = clientHeight + 'px';
     var dpr = Math.max(1, Math.min(renderState.lite ? 1 : 1.25, window.devicePixelRatio || 1));
     var ratio = dpr * renderState.scale;
     // 限制软件 Canvas 的总像素数；CSS 负责放大，游戏世界坐标保持不变。
@@ -1249,16 +1269,18 @@
       ctx.imageSmoothingEnabled = true;
       if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = renderState.lite ? 'low' : 'medium';
     }
-    if (game) { game.viewW = canvas.clientWidth; game.viewH = canvas.clientHeight; }
+    if (game) { game.viewW = clientWidth; game.viewH = clientHeight; }
   }
   window.addEventListener('resize', resize);
 
   // ================= 启动 =================
   window.addEventListener('DOMContentLoaded', function () {
     canvas = $('stage');
-    // alpha:false 避免每帧与页面背景做透明合成；desynchronized 在支持的
-    // Chrome 上缩短输入到画面的排队时间，旧浏览器会安全忽略该提示。
-    ctx = canvas.getContext('2d', { alpha: false, desynchronized: true }) || canvas.getContext('2d');
+    // alpha:false 避免每帧与页面背景做透明合成。Win7 的旧桌面合成器在
+    // desynchronized + CSS 拉伸时会只呈现左上角 backing store，因此该提示
+    // 只在现代 Windows 上启用。
+    var contextOptions = legacyWindows ? { alpha: false } : { alpha: false, desynchronized: true };
+    ctx = canvas.getContext('2d', contextOptions) || canvas.getContext('2d');
     syncGameRenderProfile();
     buildMaps();
     buildVehicles();
