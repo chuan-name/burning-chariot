@@ -682,6 +682,12 @@
 
   function onKeyUp(k) {
     if (!game || paused || game.result !== null) return;
+    if (lan && lan.inBattle && lan.playerId === 2 &&
+        ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].indexOf(k) >= 0) {
+      // 结束连续操作时立即补发不足一个 33ms 批次的尾部输入，既避免测试/状态
+      // 校正竞态，也让短按方向键在高延迟网络下尽快抵达权威端。
+      flushLanContinuousInput(performance.now ? performance.now() : Date.now(), true);
+    }
     if (k === 'Space' && canControl()) releaseLocalCharge();
   }
 

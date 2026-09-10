@@ -31,7 +31,9 @@ head('对局能正常结束');
 function playOut(g, label) {
   let frames = 0;
   while (g.result === null && frames < 60 * 60 * 12) { g.update(16); frames++; }
-  check(g.result !== null && g.turnNo >= 3, label,
+  // 高伤武器可能在双方各行动一次后合法结束；验证完整胜负状态和弹体清理，
+  // 避免把这种两回合快速击杀误判为随机失败。
+  check((g.result === 0 || g.result === 1) && g.turnNo >= 2 && g.projectiles.length === 0, label,
     `回合=${g.turnNo} 结果=${g.result} 残弹=${g.projectiles.length}`);
 }
 for (const m of RZ.MAPS) {
